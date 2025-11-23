@@ -1,8 +1,8 @@
 
 import React, { useEffect, useRef, useState } from 'react';
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 import { JarvisStatus, JarvisCommand } from '../types';
-import { Key, Mic, MicOff, AlertCircle } from 'lucide-react';
+import { Key, Mic, MicOff, AlertCircle, MessageSquare } from 'lucide-react';
 
 interface JarvisAssistantProps {
   onCommand: (cmd: JarvisCommand) => void;
@@ -21,6 +21,7 @@ const JarvisAssistant: React.FC<JarvisAssistantProps> = ({ onCommand, isInputAct
   const [showKeyInput, setShowKeyInput] = useState(false);
   const [tempKey, setTempKey] = useState('');
   const [lastTranscript, setLastTranscript] = useState('');
+  const [assistantResponse, setAssistantResponse] = useState('');
 
   // Refs for State in Callbacks
   const recognitionRef = useRef<any>(null);
@@ -78,8 +79,7 @@ const JarvisAssistant: React.FC<JarvisAssistantProps> = ({ onCommand, isInputAct
             ignoreNextEndRef.current = true; // Don't trigger auto-restart logic yet, we handle it
             setStatus('LISTENING');
             playBeep('WAKE');
-            // Restart immediately in listening mode (handled by function flow usually, but here we just wait for onend to restart if we want)
-            // Actually, for continuous: we just change state. But to ensure clean buffer, we stop & start.
+            setAssistantResponse("Yes?");
          }
       } else if (statusRef.current === 'LISTENING' && isFinal) {
           recognition.stop();
@@ -106,9 +106,6 @@ const JarvisAssistant: React.FC<JarvisAssistantProps> = ({ onCommand, isInputAct
     recognition.onend = () => {
         if (ignoreNextEndRef.current) {
             ignoreNextEndRef.current = false;
-            // If we stopped intentionally to process/switch state, we might want to restart?
-            // Actually handleUserQuery will handle the restart after processing.
-            // If we just stopped to clear buffer (wake word), restart now:
             if (statusRef.current === 'LISTENING') {
                 try { recognition.start(); } catch(e) {}
             }
@@ -192,49 +189,57 @@ const JarvisAssistant: React.FC<JarvisAssistantProps> = ({ onCommand, isInputAct
 
   const handleUserQuery = async (query: string) => {
     if (!apiKeyRef.current) {
-        speak("I need an API key to function.", false);
+        const msg = "I need an API key to function.";
+        setAssistantResponse(msg);
+        speak(msg, false);
         setStatus('IDLE');
         setShowKeyInput(true);
         return;
     }
 
     setStatus('PROCESSING');
+    setAssistantResponse("Processing...");
     
     try {
         const ai = new GoogleGenAI({ apiKey: apiKeyRef.current });
         
-        // Safety timeout 10s
-        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 10000));
+        // Use gemini-2.0-flash as a safe default
+        // Safety timeout 15s
+        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 15000));
         
+        // Manual JSON prompting is often more robust than strict schema for some model versions
         const apiPromise = ai.models.generateContent({
-            model: 'gemini-2.5-flash', 
-            contents: `Act as Jarvis. User said: "${query}". Map to JSON. Actions: OPEN_TAB, CLOSE_TAB, SEARCH, SCROLL_DOWN, SCROLL_UP, GO_HOME, NONE. Payload needed for search/open. Response is brief spoken text.`,
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: Type.OBJECT,
-                    properties: {
-                        action: { type: Type.STRING, enum: ["OPEN_TAB", "CLOSE_TAB", "SEARCH", "SCROLL_DOWN", "SCROLL_UP", "GO_HOME", "NONE"] },
-                        payload: { type: Type.STRING },
-                        response: { type: Type.STRING }
-                    },
-                    required: ["action", "response"]
-                }
+            model: 'gemini-2.0-flash', 
+            contents: `Act as Jarvis AI. User said: "${query}". 
+            Respond strictly in valid JSON format. 
+            Schema: { 
+              "action": "OPEN_TAB" | "CLOSE_TAB" | "SEARCH" | "SCROLL_DOWN" | "SCROLL_UP" | "GO_HOME" | "NONE",
+              "payload": string (optional, e.g. search query or url),
+              "response": string (short spoken response)
             }
+            Example: {"action": "SEARCH", "payload": "cats", "response": "Searching for cats."}`
         });
 
         const result: any = await Promise.race([apiPromise, timeoutPromise]);
-        const text = result.text;
-        if (!text) throw new Error("Empty response");
+        let text = result.text;
+        
+        if (!text) throw new Error("Empty response from AI");
+        
+        // Clean markdown code blocks if present
+        text = text.replace(/```json/g, '').replace(/```/g, '').trim();
+        
         const jsonResponse = JSON.parse(text);
         
         playBeep('SUCCESS');
         onCommand(jsonResponse);
+        setAssistantResponse(jsonResponse.response);
         speak(jsonResponse.response, false);
 
-    } catch (err) {
+    } catch (err: any) {
         console.error("Gemini Error:", err);
-        speak("Processing failed.", false);
+        const msg = err.message === 'Timeout' ? "Connection timed out." : "I couldn't process that.";
+        setAssistantResponse(msg);
+        speak(msg, false);
         setStatus('IDLE');
     }
   };
@@ -249,7 +254,7 @@ const JarvisAssistant: React.FC<JarvisAssistantProps> = ({ onCommand, isInputAct
     isSpeakingRef.current = true;
     setStatus('SPEAKING');
     
-    synthRef.current.cancel();
+    synthRef.current.cancel(); // Clear queue
 
     const utterance = new SpeechSynthesisUtterance(text);
     const voices = synthRef.current.getVoices();
@@ -270,6 +275,11 @@ const JarvisAssistant: React.FC<JarvisAssistantProps> = ({ onCommand, isInputAct
                 }
             }, 100);
         }
+    };
+    
+    utterance.onerror = () => {
+        isSpeakingRef.current = false;
+        setStatus('IDLE');
     };
 
     synthRef.current.speak(utterance);
@@ -307,6 +317,7 @@ const JarvisAssistant: React.FC<JarvisAssistantProps> = ({ onCommand, isInputAct
           localStorage.setItem('GEMINI_API_KEY', tempKey);
           setApiKey(tempKey);
           setShowKeyInput(false);
+          setAssistantResponse("API Key Saved.");
           speak("Connected.", false);
       }
   };
@@ -369,26 +380,31 @@ const JarvisAssistant: React.FC<JarvisAssistantProps> = ({ onCommand, isInputAct
            </div>
        )}
 
-       {isMicActive && status !== 'IDLE' && (
-           <div className="bg-slate-900/80 border border-cyan-500/30 px-3 py-1 rounded text-[10px] text-cyan-200 font-mono mb-1 max-w-[200px] truncate animate-fade-in">
-               {status === 'LISTENING' ? (lastTranscript || 'Listening...') : status}
+       {/* CHAT BUBBLE / STATUS */}
+       {(assistantResponse || (isMicActive && status !== 'IDLE')) && (
+           <div className="bg-slate-900/90 border border-cyan-500/40 px-4 py-2 rounded-2xl rounded-tr-none text-xs text-cyan-100 font-mono mb-2 max-w-[240px] shadow-lg animate-fade-in flex items-start gap-2">
+               <MessageSquare size={14} className="mt-0.5 text-cyan-400 shrink-0"/>
+               <div>
+                 {status === 'LISTENING' && !assistantResponse ? (lastTranscript || 'Listening...') : (assistantResponse || status)}
+               </div>
            </div>
        )}
 
        {showKeyInput && (
            <div className="bg-slate-900/95 border border-cyan-500/50 p-4 rounded-xl mb-2 w-72 shadow-2xl">
+               <div className="text-cyan-400 text-xs font-bold mb-2 uppercase tracking-wider">Configure Neural Link</div>
                <input 
-                 type="password" placeholder="Gemini API Key" value={tempKey} onChange={(e) => setTempKey(e.target.value)}
-                 className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-white mb-2"
+                 type="password" placeholder="Paste Gemini API Key" value={tempKey} onChange={(e) => setTempKey(e.target.value)}
+                 className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-2 text-xs text-white mb-2 focus:border-cyan-500 outline-none transition-colors"
                />
-               <button onClick={saveKey} className="w-full bg-cyan-600 text-white text-xs font-bold py-1.5 rounded">CONNECT</button>
+               <button onClick={saveKey} className="w-full bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold py-2 rounded transition-colors">CONNECT SYSTEM</button>
            </div>
        )}
 
        <div className="flex items-center gap-4">
-           {!isMicActive && !permissionDenied && (
-                <div className="bg-slate-900/90 text-xs text-cyan-400 px-2 py-1 rounded mr-2 pointer-events-none animate-pulse">
-                    Click Orb to Activate
+           {!isMicActive && !permissionDenied && !apiKey && (
+                <div className="bg-red-900/90 text-xs text-red-200 px-2 py-1 rounded mr-2 pointer-events-none animate-pulse">
+                    Setup Required
                 </div>
            )}
            
@@ -402,7 +418,7 @@ const JarvisAssistant: React.FC<JarvisAssistantProps> = ({ onCommand, isInputAct
                 )}
            </div>
 
-           <button onClick={() => setShowKeyInput(!showKeyInput)} className={`p-2 rounded-full border bg-slate-900 ${!apiKey ? 'border-red-500 text-red-500 animate-pulse' : 'border-slate-700 text-slate-500'}`}>
+           <button onClick={() => setShowKeyInput(!showKeyInput)} className={`p-2 rounded-full border bg-slate-900 hover:bg-slate-800 transition-colors ${!apiKey ? 'border-red-500 text-red-500 animate-pulse' : 'border-slate-700 text-slate-500'}`}>
                <Key size={14} />
            </button>
        </div>
