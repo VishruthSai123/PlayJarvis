@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { CursorData } from '../types';
+import { CursorData, JarvisCommand } from '../types';
 import { Plus, Maximize2, Minimize2, Mic, Search, Globe, X, Minus, RotateCw, Scaling } from 'lucide-react';
+import JarvisAssistant from './JarvisAssistant';
 
 interface Tab {
   id: number;
@@ -44,6 +45,7 @@ const BrowseScreen: React.FC<BrowseScreenProps> = ({ cursorData }) => {
   const [maxZ, setMaxZ] = useState(1);
   const [ripples, setRipples] = useState<{id: number, x: number, y: number, double: boolean}[]>([]);
   const [isResizingState, setIsResizingState] = useState(false);
+  const [isAnyInputActive, setIsAnyInputActive] = useState(false); // Track for Jarvis
   
   const dragRef = useRef<{ tabId: number; startMouseX: number; startMouseY: number; initialTabX: number; initialTabY: number; isDragging: boolean; } | null>(null);
   const resizeRef = useRef<{ tabId: number; startX: number; startY: number; startW: number; startH: number; startTabY: number; } | null>(null);
@@ -58,14 +60,20 @@ const BrowseScreen: React.FC<BrowseScreenProps> = ({ cursorData }) => {
     wasPinching: false, pinchStartTime: 0, startX: 0, startY: 0, lastClickTime: 0
   });
 
-  const createTab = () => {
+  // Track active input state for Jarvis
+  useEffect(() => {
+    const active = tabs.some(t => t.isListening);
+    setIsAnyInputActive(active);
+  }, [tabs]);
+
+  const createTab = (url: string = 'https://www.wikipedia.org') => {
     const newId = Date.now();
     setTabs(prev => [...prev, {
         id: newId,
         x: window.innerWidth * 0.15 + (prev.length * 40),
         y: window.innerHeight * 0.15 + (prev.length * 40),
         width: 800, height: 500,
-        title: 'New Tab', url: 'https://www.wikipedia.org',
+        title: 'New Tab', url: url,
         isMaximized: false, isCollapsed: false, zIndex: maxZ + 1,
         inputValue: '', isListening: false, renderKey: 0
     }]);
@@ -93,7 +101,6 @@ const BrowseScreen: React.FC<BrowseScreenProps> = ({ cursorData }) => {
     if (!('webkitSpeechRecognition' in window)) {
        const text = prompt("Enter Search Query / URL:");
        if (text) {
-         // Wikipedia search fallback for better embed support
          const url = text.startsWith('http') ? text : `https://en.wikipedia.org/wiki/${encodeURIComponent(text)}`;
          setTabs(prev => prev.map(t => t.id === tabId ? { 
             ...t, inputValue: text, 
@@ -120,6 +127,47 @@ const BrowseScreen: React.FC<BrowseScreenProps> = ({ cursorData }) => {
     recognition.onerror = () => setTabs(prev => prev.map(t => t.id === tabId ? { ...t, isListening: false, inputValue: 'Error' } : t));
     recognition.onend = () => setTabs(prev => prev.map(t => t.id === tabId && t.isListening ? { ...t, isListening: false } : t));
     recognition.start();
+  };
+
+  // JARVIS COMMAND HANDLER
+  const handleJarvisCommand = (cmd: JarvisCommand) => {
+      switch(cmd.action) {
+          case 'OPEN_TAB':
+              createTab(cmd.payload || 'https://www.wikipedia.org');
+              break;
+          case 'CLOSE_TAB':
+              // Close highest z-index tab
+              if (tabs.length > 0) {
+                  const topTab = tabs.reduce((prev, current) => (prev.zIndex > current.zIndex) ? prev : current);
+                  closeTab(topTab.id);
+              }
+              break;
+          case 'SEARCH':
+              if (cmd.payload && tabs.length > 0) {
+                   // Update top tab
+                   const topTab = tabs.reduce((prev, current) => (prev.zIndex > current.zIndex) ? prev : current);
+                   const url = `https://en.wikipedia.org/wiki/${encodeURIComponent(cmd.payload)}`;
+                   setTabs(prev => prev.map(t => t.id === topTab.id ? { 
+                        ...t, inputValue: cmd.payload || '', url, renderKey: t.renderKey + 1 
+                   } : t));
+              } else if (cmd.payload) {
+                   // Create new if none exist
+                   const url = `https://en.wikipedia.org/wiki/${encodeURIComponent(cmd.payload)}`;
+                   createTab(url);
+              }
+              break;
+          case 'SCROLL_DOWN':
+              window.scrollBy({ top: 300, behavior: 'smooth'}); 
+              // Dispatch key to active element
+              window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+              break;
+          case 'SCROLL_UP':
+              window.scrollBy({ top: -300, behavior: 'smooth'});
+              window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }));
+              break;
+          default:
+              break;
+      }
   };
 
   const scrollIntervalRef = useRef<number | null>(null);
@@ -251,12 +299,16 @@ const BrowseScreen: React.FC<BrowseScreenProps> = ({ cursorData }) => {
 
   return (
     <div className="absolute inset-0 pointer-events-none overflow-hidden">
+      {/* JARVIS INTEGRATION */}
+      <JarvisAssistant onCommand={handleJarvisCommand} isInputActive={isAnyInputActive} />
+
       {ripples.map(r => (
           <div key={r.id} className={`absolute rounded-full border-2 z-[200] animate-[ping_0.6s_ease-out_forwards] ${r.double ? 'border-pink-400 bg-pink-400/20' : 'border-cyan-400 bg-cyan-400/20'}`} style={{ left: r.x - 25, top: r.y - 25, width: 50, height: 50 }} />
       ))}
       <div 
         className="absolute top-8 right-8 w-14 h-14 bg-cyan-900/80 border-2 border-cyan-400 rounded-full flex items-center justify-center shadow-[0_0_20px_rgba(34,211,238,0.5)] transition-transform duration-100 z-[60] pointer-events-auto cursor-pointer"
         style={{ transform: cursorData && Math.hypot(cursorData.x - (window.innerWidth - 53), cursorData.y - 57) < 40 ? 'scale(1.1)' : 'scale(1)' }}
+        onClick={() => createTab()}
       >
         <Plus className="text-cyan-200 w-8 h-8" />
       </div>
@@ -277,10 +329,10 @@ const BrowseScreen: React.FC<BrowseScreenProps> = ({ cursorData }) => {
                {!tab.isMaximized && (
                    <div className="absolute -top-3 -right-3 p-4 text-cyan-400 hover:text-white cursor-ne-resize z-50 scale-75 opacity-80 hover:opacity-100" title="Pinch to Resize"><Scaling size={24} /></div>
                )}
-               <div className="p-2 hover:bg-slate-700 rounded text-cyan-500 hover:text-cyan-300"><RotateCw size={16} /></div>
-               <div className="p-2 hover:bg-slate-700 rounded text-cyan-500 hover:text-cyan-300"><Minus size={16} /></div>
-               <div className="p-2 hover:bg-slate-700 rounded text-cyan-500 hover:text-cyan-300">{tab.isMaximized ? <Minimize2 size={16}/> : <Maximize2 size={16}/>}</div>
-               <div className="p-2 hover:bg-red-900/30 rounded text-red-500 hover:text-red-300 z-10"><X size={16} /></div>
+               <div className="p-2 hover:bg-slate-700 rounded text-cyan-500 hover:text-cyan-300" onClick={() => reloadTab(tab.id)}><RotateCw size={16} /></div>
+               <div className="p-2 hover:bg-slate-700 rounded text-cyan-500 hover:text-cyan-300" onClick={() => toggleCollapse(tab.id)}><Minus size={16} /></div>
+               <div className="p-2 hover:bg-slate-700 rounded text-cyan-500 hover:text-cyan-300" onClick={() => toggleMaximize(tab.id)}>{tab.isMaximized ? <Minimize2 size={16}/> : <Maximize2 size={16}/>}</div>
+               <div className="p-2 hover:bg-red-900/30 rounded text-red-500 hover:text-red-300 z-10" onClick={() => closeTab(tab.id)}><X size={16} /></div>
              </div>
           </div>
           {!tab.isCollapsed && (

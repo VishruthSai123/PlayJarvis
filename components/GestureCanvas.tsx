@@ -12,7 +12,7 @@ interface GestureCanvasProps {
 const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCursorUpdate }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const requestRef = useRef<number>();
+  const requestRef = useRef<number>(0);
   
   // CRITICAL: Ref to track mode inside the animation loop without stale closures
   const modeRef = useRef<ScreenMode>(mode);
@@ -218,14 +218,22 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCu
       }
       prevHandPosRef.current = { x: wrist.x, y: wrist.y };
 
-      const IS_MOVING_FAST = velocityRef.current > 0.04; 
-      const RELEASE_THRESHOLD = 0.6; 
-      const RELEASE_FRAMES = 8; 
+      // --- TUNED RELEASE CONSTANTS ---
+      const IS_MOVING_FAST = velocityRef.current > 0.1; // Increased: Only block if moving VERY fast
+      const RELEASE_THRESHOLD = 0.45; // Relaxed: Easier to release
+      const RELEASE_FRAMES = 3; // Faster: Snappier release
 
       // Pinch State Logic
       let isPinching = false;
       if (grabbedObjectIdRef.current !== null) {
-          if (cursor.pinchVal > RELEASE_THRESHOLD && !IS_MOVING_FAST) {
+          // Panic Release: If hand is WIDE OPEN (> 0.8), drop immediately regardless of velocity
+          if (cursor.pinchVal > 0.8) {
+             isPinching = false;
+             cursor.mode = 'OPEN';
+             releaseDebounceRef.current = RELEASE_FRAMES + 1;
+          }
+          // Normal Release: Must be open past threshold and stable
+          else if (cursor.pinchVal > RELEASE_THRESHOLD && !IS_MOVING_FAST) {
               releaseDebounceRef.current += 1;
               cursor.releaseProgress = Math.min(1, releaseDebounceRef.current / RELEASE_FRAMES);
               if (releaseDebounceRef.current > RELEASE_FRAMES) {
@@ -256,7 +264,7 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCu
       cursor.visible = true;
       cursor.pinching = isPinching;
 
-      // Tracking
+      // Tracking - Palm Centroid
       const knuckleMidX = (indexMCP.x + middleMCP.x + pinkyMCP.x) / 3;
       const knuckleMidY = (indexMCP.y + middleMCP.y + pinkyMCP.y) / 3;
       const palmDirX = knuckleMidX - wrist.x;
@@ -265,8 +273,22 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCu
       const virtualTipX = knuckleMidX + palmDirX * 1.6;
       const virtualTipY = knuckleMidY + palmDirY * 1.6;
 
-      const rawTargetX = (1 - virtualTipX) * canvas.width;
-      const rawTargetY = virtualTipY * canvas.height;
+      // --- INTELLIGENT CORNER REMAPPING ---
+      // Map a smaller "safe zone" of the camera to the full screen.
+      // This allows reaching corners without the hand exiting the camera frame.
+      const HORIZONTAL_MARGIN = 0.18; // 18% margin on left/right
+      const VERTICAL_MARGIN = 0.22;   // 22% margin on top/bottom
+      
+      // Remap (0.18 -> 0.0) and (0.82 -> 1.0)
+      let safeX = (virtualTipX - HORIZONTAL_MARGIN) / (1 - 2 * HORIZONTAL_MARGIN);
+      let safeY = (virtualTipY - VERTICAL_MARGIN) / (1 - 2 * VERTICAL_MARGIN);
+
+      // Clamp values (so we don't go off screen if we really stretch)
+      safeX = Math.max(0, Math.min(1, safeX));
+      safeY = Math.max(0, Math.min(1, safeY));
+
+      const rawTargetX = (1 - safeX) * canvas.width; // Mirroring happens here
+      const rawTargetY = safeY * canvas.height;
 
       // Precision Smoothing for Browser
       const minAlpha = currentMode === 'BROWSE' ? 0.05 : (isPinching ? 0.35 : 0.12);

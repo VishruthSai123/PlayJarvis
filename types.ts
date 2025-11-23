@@ -47,3 +47,12 @@ export enum GameState {
   RUNNING = 'RUNNING',
   ERROR = 'ERROR'
 }
+
+// JARVIS TYPES
+export type JarvisStatus = 'IDLE' | 'LISTENING' | 'PROCESSING' | 'SPEAKING';
+
+export interface JarvisCommand {
+  action: 'OPEN_TAB' | 'CLOSE_TAB' | 'SEARCH' | 'SCROLL_DOWN' | 'SCROLL_UP' | 'GO_HOME' | 'NONE';
+  payload?: string; // e.g., search query or url
+  response?: string; // spoken response
+}
