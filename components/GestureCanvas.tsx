@@ -13,7 +13,6 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCu
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const requestRef = useRef<number>();
-  const [status, setStatus] = useState<GameState>(GameState.LOADING_MODEL);
   
   // CRITICAL: Ref to track mode inside the animation loop without stale closures
   const modeRef = useRef<ScreenMode>(mode);
@@ -101,8 +100,6 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCu
   });
 
   const prevCursorRef = useRef<{ x: number, y: number, time: number }>({ x: 0.5, y: 0.5, time: 0 });
-
-  // Grid animation state
   const gridOffsetRef = useRef(0);
 
   const initializeMediaPipe = useCallback(async () => {
@@ -124,13 +121,11 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCu
       startCamera();
     } catch (error) {
       console.error("Error initializing MediaPipe:", error);
-      setStatus(GameState.ERROR);
       onStateChange(GameState.ERROR);
     }
   }, [onStateChange]);
 
   const startCamera = async () => {
-    setStatus(GameState.WAITING_PERMISSIONS);
     onStateChange(GameState.WAITING_PERMISSIONS);
 
     try {
@@ -145,14 +140,12 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCu
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         videoRef.current.addEventListener("loadeddata", () => {
-          setStatus(GameState.RUNNING);
           onStateChange(GameState.RUNNING);
           predictWebcam();
         });
       }
     } catch (error) {
       console.error("Error accessing camera:", error);
-      setStatus(GameState.ERROR);
       onStateChange(GameState.ERROR);
     }
   };
@@ -163,26 +156,25 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCu
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
     const video = videoRef.current;
-    // CRITICAL: Use ref value inside loop
+    
+    // CRITICAL: Always read from ref to get the latest mode in the loop
     const currentMode = modeRef.current;
 
-    // Handle resizing
     if (canvas.width !== window.innerWidth || canvas.height !== window.innerHeight) {
       canvas.width = window.innerWidth;
       canvas.height = window.innerHeight;
     }
 
-    // --- Detection Phase ---
+    // --- Detection ---
     let results;
     try {
        if(video.videoWidth > 0 && video.videoHeight > 0 && handLandmarkerRef.current) {
            results = handLandmarkerRef.current.detectForVideo(video, performance.now());
        }
     } catch(e) {
-        console.warn("Detection frame skipped");
+        console.warn("Frame skipped");
     }
 
-    // --- Logic Phase ---
     const cursor = cursorRef.current;
     const prevCursor = prevCursorRef.current;
     const objects = objectsRef.current;
@@ -214,13 +206,11 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCu
       
       cursor.pinchVal = smoothScalar(cursor.pinchVal, normalizedPinch, 0.3);
 
-      // Tilt Calculation (Pitch)
-      // Positive = Fingers pointing down (Scroll Down)
-      // Negative = Fingers pointing up (Scroll Up)
+      // Tilt
       const rawTilt = (middleTip.y - wrist.y) / handScale;
       cursor.tilt = smoothScalar(cursor.tilt, rawTilt, 0.1);
 
-      // Centrifugal Guard
+      // Velocity
       if (prevHandPosRef.current) {
           const dx = wrist.x - prevHandPosRef.current.x;
           const dy = wrist.y - prevHandPosRef.current.y;
@@ -229,15 +219,12 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCu
       prevHandPosRef.current = { x: wrist.x, y: wrist.y };
 
       const IS_MOVING_FAST = velocityRef.current > 0.04; 
-
-      // State Machine
-      let isPinching = false;
-      const GRAB_THRESHOLD = 0.18; 
       const RELEASE_THRESHOLD = 0.6; 
       const RELEASE_FRAMES = 8; 
 
+      // Pinch State Logic
+      let isPinching = false;
       if (grabbedObjectIdRef.current !== null) {
-          // Strict release logic for objects
           if (cursor.pinchVal > RELEASE_THRESHOLD && !IS_MOVING_FAST) {
               releaseDebounceRef.current += 1;
               cursor.releaseProgress = Math.min(1, releaseDebounceRef.current / RELEASE_FRAMES);
@@ -255,9 +242,8 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCu
               cursor.mode = 'LOCKED';
           }
       } else {
-          // Simple pinch logic for UI / cursor
           cursor.releaseProgress = 0;
-          if (cursor.pinchVal < GRAB_THRESHOLD) {
+          if (cursor.pinchVal < 0.18) {
               isPinching = true;
               cursor.mode = 'PINCH';
           } else {
@@ -270,7 +256,7 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCu
       cursor.visible = true;
       cursor.pinching = isPinching;
 
-      // Stable Palm Tracking
+      // Tracking
       const knuckleMidX = (indexMCP.x + middleMCP.x + pinkyMCP.x) / 3;
       const knuckleMidY = (indexMCP.y + middleMCP.y + pinkyMCP.y) / 3;
       const palmDirX = knuckleMidX - wrist.x;
@@ -282,10 +268,9 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCu
       const rawTargetX = (1 - virtualTipX) * canvas.width;
       const rawTargetY = virtualTipY * canvas.height;
 
-      // --- PRECISION MODE FOR BROWSER ---
-      // If in BROWSE mode, we use very low alpha for high precision (less jitter)
+      // Precision Smoothing for Browser
       const minAlpha = currentMode === 'BROWSE' ? 0.05 : (isPinching ? 0.35 : 0.12);
-      const maxAlpha = currentMode === 'BROWSE' ? 0.2 : 0.75; // Lower max speed in browser
+      const maxAlpha = currentMode === 'BROWSE' ? 0.2 : 0.75;
       
       const smoothed = smoothPointAdaptive(
         { x: cursor.x, y: cursor.y }, 
@@ -297,7 +282,7 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCu
       cursor.x = smoothed.x;
       cursor.y = smoothed.y;
 
-      // --- Physics Interaction (ONLY IN PLAYGROUND) ---
+      // OBJECT INTERACTION (Playground Only)
       if (currentMode === 'PLAYGROUND') {
         objects.forEach(obj => obj.isHovered = false);
 
@@ -317,11 +302,9 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCu
 
         if (activeObject) {
           activeObject.isHovered = true;
-          // Magnetic aim assist
           if (!cursor.pinching && normalizedPinch < 0.3 && !grabbedObjectIdRef.current) {
-              const pullStrength = 0.25;
-              cursor.x += (activeObject.x - cursor.x) * pullStrength;
-              cursor.y += (activeObject.y - cursor.y) * pullStrength;
+              cursor.x += (activeObject.x - cursor.x) * 0.25;
+              cursor.y += (activeObject.y - cursor.y) * 0.25;
           }
           if (isPinching && !grabbedObjectIdRef.current) {
             grabbedObjectIdRef.current = activeObject.id;
@@ -333,12 +316,10 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCu
           if (!isPinching && obj.id === grabbedObjectIdRef.current) {
             obj.isGrabbed = false;
             grabbedObjectIdRef.current = null;
-            const scale = 0.9;
-            const vx = (cursor.x - prevCursor.x) * scale;
-            const vy = (cursor.y - prevCursor.y) * scale;
-            const maxSpeed = 40;
-            obj.vx = Math.min(Math.max(vx, -maxSpeed), maxSpeed);
-            obj.vy = Math.min(Math.max(vy, -maxSpeed), maxSpeed);
+            const vx = (cursor.x - prevCursor.x) * 0.9;
+            const vy = (cursor.y - prevCursor.y) * 0.9;
+            obj.vx = Math.min(Math.max(vx, -40), 40);
+            obj.vy = Math.min(Math.max(vy, -40), 40);
           }
           if (obj.isGrabbed) {
             obj.x += (cursor.x - obj.x) * 0.92;
@@ -346,7 +327,7 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCu
             obj.vx = 0; obj.vy = 0;
           }
         });
-      } // End playground check
+      }
 
       prevCursorRef.current = { x: cursor.x, y: cursor.y, time: performance.now() };
 
@@ -367,25 +348,18 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCu
       if (missedFramesRef.current > 8) {
           cursor.visible = false;
           cursor.pinching = false;
-          if (grabbedObjectIdRef.current !== null) {
-             const obj = objects.find(o => o.id === grabbedObjectIdRef.current);
-             if (obj) obj.isGrabbed = false;
-             grabbedObjectIdRef.current = null;
-          }
+          grabbedObjectIdRef.current = null;
       }
     }
 
-    // --- Physics Step (ONLY PLAYGROUND) ---
     if (currentMode === 'PLAYGROUND') {
         objects.forEach(obj => updatePhysics(obj, { width: canvas.width, height: canvas.height }));
     }
 
-    // --- Render Phase ---
+    // --- RENDER ---
     if (ctx) {
-      // Clear canvas (Transparent)
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.clearRect(0, 0, canvas.width, canvas.height); // Transparent
       
-      // Draw Grid (Lines Only)
       drawGrid(ctx, canvas.width, canvas.height, currentMode);
       
       if (currentMode === 'PLAYGROUND') {
@@ -402,7 +376,6 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCu
 
   const drawGrid = (ctx: CanvasRenderingContext2D, width: number, height: number, mode: ScreenMode) => {
     ctx.save();
-    // In Browse mode, make grid very subtle
     const opacity = mode === 'BROWSE' ? 0.05 : 0.15;
     ctx.strokeStyle = `rgba(6, 182, 212, ${opacity})`; 
     ctx.lineWidth = 1;
@@ -439,10 +412,8 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCu
       const s = obj.radius * 1.6; 
       ctx.translate(obj.x, obj.y);
       ctx.rotate((obj.vx + obj.vy) * 0.05);
-      ctx.fillStyle = obj.color;
       ctx.fillRect(-s/2, -s/2, s, s);
       ctx.strokeRect(-s/2, -s/2, s, s);
-      ctx.restore();
     } else if (obj.shape === 'PYRAMID') {
       const s = obj.radius * 1.8;
       ctx.translate(obj.x, obj.y);
@@ -452,10 +423,8 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCu
       ctx.lineTo(s/1.5, s/2);
       ctx.lineTo(-s/1.5, s/2);
       ctx.closePath();
-      ctx.fillStyle = obj.color;
       ctx.fill();
       ctx.stroke();
-      ctx.restore();
     }
     ctx.restore();
   };
@@ -465,10 +434,9 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCu
     ctx.translate(x, y);
     
     let color;
-    // Different colors for Browser mode
     if (screenMode === 'BROWSE') {
-         if (mode === 'PINCH') color = '#FACC15'; // Yellow pinch
-         else color = '#38BDF8'; // Light Blue
+         if (mode === 'PINCH') color = '#FACC15'; 
+         else color = '#38BDF8'; 
     } else {
          if (mode === 'LOCKED') color = '#F43F5E';
          else if (mode === 'PINCH') color = '#E879F9';
@@ -489,18 +457,14 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCu
     ctx.beginPath(); ctx.arc(0, 0, r, Math.PI, Math.PI * 1.3); ctx.stroke();
     ctx.restore();
     
-    // SCROLL GAUGE (Right Side)
+    // Scroll Gauge
     if (screenMode === 'BROWSE') {
         const gaugeH = 40;
-        const gaugeW = 4;
         const xOff = 35;
-        
         ctx.fillStyle = 'rgba(255,255,255,0.2)';
-        ctx.fillRect(xOff, -gaugeH/2, gaugeW, gaugeH);
+        ctx.fillRect(xOff, -gaugeH/2, 4, gaugeH);
         
-        // Tilt indicator
         const tiltVal = Math.min(1, Math.max(-1, tilt)); 
-        // Thresholds matching BrowseScreen logic (0.6)
         const isScrolling = Math.abs(tiltVal) > 0.6;
         
         ctx.fillStyle = isScrolling ? (tiltVal > 0 ? '#FACC15' : '#34D399') : '#fff';
@@ -509,8 +473,7 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCu
     }
 
     if (mode === 'LOCKED' && releaseProgress > 0) {
-        const ringR = 30 + releaseProgress * 20;
-        ctx.beginPath(); ctx.arc(0, 0, ringR, 0, Math.PI * 2);
+        ctx.beginPath(); ctx.arc(0, 0, 30 + releaseProgress * 20, 0, Math.PI * 2);
         ctx.strokeStyle = `rgba(244, 63, 94, ${1 - releaseProgress})`;
         ctx.stroke();
     }
@@ -518,11 +481,9 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCu
     if (mode !== 'LOCKED') {
         const visualPinch = Math.min(1, Math.max(0, pinchVal));
         if (visualPinch < 0.6) { 
-            const ringSize = Math.max(8, visualPinch * 60);
-            ctx.beginPath(); ctx.arc(0, 0, ringSize, 0, Math.PI * 2);
+            ctx.beginPath(); ctx.arc(0, 0, Math.max(8, visualPinch * 60), 0, Math.PI * 2);
             ctx.fillStyle = `rgba(232, 121, 249, ${0.8 - visualPinch})`; 
-            ctx.fill();
-            ctx.stroke();
+            ctx.fill(); ctx.stroke();
         }
     }
 
@@ -533,9 +494,7 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCu
 
   useEffect(() => {
     initializeMediaPipe();
-    return () => {
-      if (requestRef.current) cancelAnimationFrame(requestRef.current);
-    };
+    return () => { if (requestRef.current) cancelAnimationFrame(requestRef.current); };
   }, [initializeMediaPipe]);
 
   return (
@@ -543,9 +502,7 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCu
       <video
         ref={videoRef}
         className="absolute top-0 left-0 w-full h-full object-cover opacity-0 pointer-events-none"
-        playsInline
-        autoPlay
-        muted
+        playsInline autoPlay muted
         style={{ transform: 'scaleX(-1)' }}
       />
       <canvas
