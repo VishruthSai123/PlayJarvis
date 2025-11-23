@@ -69,56 +69,65 @@ const JarvisAssistant: React.FC<JarvisAssistantProps> = ({ onCommand, isInputAct
       const transcript = result[0].transcript.trim().toLowerCase();
       const isFinal = result.isFinal;
       
+      // Update UI with what it hears
       setLastTranscript(transcript);
 
       if (statusRef.current === 'IDLE') {
          // Wake Word Detection
          const wakeWords = ['jarvis', 'harvest', 'service', 'travis', 'davis', 'javis', 'java', 'hey jarvis'];
          if (wakeWords.some(w => transcript.includes(w))) {
-            recognition.stop(); // Stop to reset for command
-            ignoreNextEndRef.current = true; // Don't trigger auto-restart logic yet, we handle it
+            recognition.stop(); // Stop to reset for command capture clarity
+            ignoreNextEndRef.current = true; 
             setStatus('LISTENING');
             playBeep('WAKE');
-            setAssistantResponse("Yes?");
+            setAssistantResponse("I'm listening...");
          }
       } else if (statusRef.current === 'LISTENING' && isFinal) {
-          recognition.stop();
-          ignoreNextEndRef.current = true;
-          handleUserQuery(transcript);
+          // If we are listening, wait for a FINAL result to process
+          // Clean up wake word if it was part of the sentence
+          let cleanQuery = transcript;
+          ['jarvis', 'hey jarvis'].forEach(w => {
+              cleanQuery = cleanQuery.replace(w, '').trim();
+          });
+
+          if (cleanQuery.length > 2) {
+            recognition.stop();
+            ignoreNextEndRef.current = true;
+            handleUserQuery(cleanQuery);
+          }
       }
     };
 
     recognition.onerror = (event: any) => {
-        console.warn("Speech Error:", event.error);
         if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+            console.warn("Speech Error:", event.error);
             setPermissionDenied(true);
             setErrorMessage("Permission denied. Check settings.");
             isMicActiveRef.current = false;
             setIsMicActive(false);
         } else if (event.error === 'no-speech') {
-            // Normal, just ignore
-        } else {
-             // Other errors like network
-             // Don't auto-stop for everything, but log it
+            // Normal silence, ignore
         }
     };
 
     recognition.onend = () => {
         if (ignoreNextEndRef.current) {
             ignoreNextEndRef.current = false;
-            if (statusRef.current === 'LISTENING') {
-                try { recognition.start(); } catch(e) {}
-            }
+            // Short delay before restarting to allow state transition
+            setTimeout(() => {
+                 if (statusRef.current === 'LISTENING' || statusRef.current === 'IDLE') {
+                    try { recognition.start(); } catch(e) {}
+                 }
+            }, 50);
             return;
         }
 
         // SMART RESTART
         if (isMicActiveRef.current && !isSpeakingRef.current && statusRef.current !== 'PROCESSING' && !permissionDenied) {
-            console.log("Auto-restarting Mic...");
             try {
                 recognition.start();
             } catch (e) {
-                console.log("Restart failed", e);
+                // Ignore restart errors
             }
         } else {
             if (!isMicActiveRef.current) setIsMicActive(false);
@@ -198,18 +207,17 @@ const JarvisAssistant: React.FC<JarvisAssistantProps> = ({ onCommand, isInputAct
     }
 
     setStatus('PROCESSING');
-    setAssistantResponse("Processing...");
+    setAssistantResponse("Thinking...");
     
     try {
         const ai = new GoogleGenAI({ apiKey: apiKeyRef.current });
         
-        // Use gemini-2.0-flash as a safe default
         // Safety timeout 15s
         const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 15000));
         
-        // Manual JSON prompting is often more robust than strict schema for some model versions
+        // USE gemini-2.5-flash for reliability
         const apiPromise = ai.models.generateContent({
-            model: 'gemini-2.0-flash', 
+            model: 'gemini-2.5-flash', 
             contents: `Act as Jarvis AI. User said: "${query}". 
             Respond strictly in valid JSON format. 
             Schema: { 
@@ -238,8 +246,8 @@ const JarvisAssistant: React.FC<JarvisAssistantProps> = ({ onCommand, isInputAct
     } catch (err: any) {
         console.error("Gemini Error:", err);
         const msg = err.message === 'Timeout' ? "Connection timed out." : "I couldn't process that.";
-        setAssistantResponse(msg);
-        speak(msg, false);
+        setAssistantResponse(msg + " (" + (err.message || 'Error') + ")");
+        speak("I encountered an error.", false);
         setStatus('IDLE');
     }
   };
@@ -249,7 +257,7 @@ const JarvisAssistant: React.FC<JarvisAssistantProps> = ({ onCommand, isInputAct
     
     // Abort mic while speaking to prevent loop
     if (recognitionRef.current) recognitionRef.current.abort();
-    ignoreNextEndRef.current = true; // Don't auto-restart immediately on abort
+    ignoreNextEndRef.current = true; 
     
     isSpeakingRef.current = true;
     setStatus('SPEAKING');
@@ -309,6 +317,8 @@ const JarvisAssistant: React.FC<JarvisAssistantProps> = ({ onCommand, isInputAct
               gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.15);
               osc.start(); osc.stop(ctx.currentTime + 0.15);
           }
+          // CLOSE CONTEXT TO PREVENT LEAK
+          setTimeout(() => ctx.close(), 200);
       } catch(e) {}
   };
 
