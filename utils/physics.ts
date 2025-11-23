@@ -11,6 +11,10 @@ export const smoothPoint = (current: Point, target: Point, alpha: number): Point
   };
 };
 
+export const smoothScalar = (current: number, target: number, alpha: number): number => {
+  return current + (target - current) * alpha;
+};
+
 // Adaptive smoothing that reduces jitter when slow, but eliminates lag when fast
 export const smoothPointAdaptive = (current: Point, target: Point, minAlpha: number = 0.1, maxAlpha: number = 0.6): Point => {
   const dx = target.x - current.x;

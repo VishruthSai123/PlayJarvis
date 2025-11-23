@@ -2,6 +2,7 @@
   "name": "GesturePhysics",
   "description": "Control a virtual object using hand gestures via your webcam. Pinch to grab, swipe to throw.",
   "requestFramePermissions": [
-    "camera"
+    "camera",
+    "microphone"
   ]
 }

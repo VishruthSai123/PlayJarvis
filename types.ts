@@ -5,6 +5,18 @@ export interface Point {
 
 export type ShapeType = 'ORB' | 'CUBE' | 'PYRAMID';
 
+export type ScreenMode = 'PLAYGROUND' | 'BROWSE';
+
+export interface CursorData {
+  x: number;
+  y: number;
+  pinching: boolean;
+  gestureMode: 'OPEN' | 'POINT' | 'PINCH' | 'LOCKED';
+  pinchVal: number;
+  timestamp: number;
+  tilt: number; // New property for scroll gesture (Pitch)
+}
+
 export interface PhysicsObject {
   id: number;
   x: number;
