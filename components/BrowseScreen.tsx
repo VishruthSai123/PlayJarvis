@@ -30,8 +30,8 @@ const BrowseScreen: React.FC<BrowseScreenProps> = ({ cursorData }) => {
       y: window.innerHeight * 0.2,
       width: 800,
       height: 500,
-      title: 'Bing Search',
-      url: 'https://www.bing.com',
+      title: 'Wikipedia',
+      url: 'https://www.wikipedia.org',
       isMaximized: false,
       isCollapsed: false,
       zIndex: 1,
@@ -65,7 +65,7 @@ const BrowseScreen: React.FC<BrowseScreenProps> = ({ cursorData }) => {
         x: window.innerWidth * 0.15 + (prev.length * 40),
         y: window.innerHeight * 0.15 + (prev.length * 40),
         width: 800, height: 500,
-        title: 'New Tab', url: 'https://www.bing.com',
+        title: 'New Tab', url: 'https://www.wikipedia.org',
         isMaximized: false, isCollapsed: false, zIndex: maxZ + 1,
         inputValue: '', isListening: false, renderKey: 0
     }]);
@@ -93,9 +93,11 @@ const BrowseScreen: React.FC<BrowseScreenProps> = ({ cursorData }) => {
     if (!('webkitSpeechRecognition' in window)) {
        const text = prompt("Enter Search Query / URL:");
        if (text) {
+         // Wikipedia search fallback for better embed support
+         const url = text.startsWith('http') ? text : `https://en.wikipedia.org/wiki/${encodeURIComponent(text)}`;
          setTabs(prev => prev.map(t => t.id === tabId ? { 
             ...t, inputValue: text, 
-            url: text.startsWith('http') ? text : `https://www.bing.com/search?q=${encodeURIComponent(text)}`,
+            url: url,
             renderKey: t.renderKey + 1
          } : t));
        }
@@ -108,9 +110,10 @@ const BrowseScreen: React.FC<BrowseScreenProps> = ({ cursorData }) => {
 
     recognition.onresult = (event: any) => {
       const text = event.results[0][0].transcript;
+      const url = `https://en.wikipedia.org/wiki/${encodeURIComponent(text)}`;
       setTabs(prev => prev.map(t => t.id === tabId ? { 
           ...t, inputValue: text, isListening: false,
-          url: `https://www.bing.com/search?q=${encodeURIComponent(text)}`,
+          url: url,
           renderKey: t.renderKey + 1
       } : t));
     };
@@ -282,7 +285,7 @@ const BrowseScreen: React.FC<BrowseScreenProps> = ({ cursorData }) => {
           </div>
           {!tab.isCollapsed && (
             <div className="flex-1 bg-white relative group w-full h-full">
-              <iframe key={tab.renderKey} src={tab.url} className={`w-full h-full border-none pointer-events-auto ${isResizingState ? 'pointer-events-none' : ''}`} title={`Tab ${tab.id}`} sandbox="allow-scripts allow-same-origin allow-forms allow-popups" />
+              <iframe key={tab.renderKey} src={tab.url} className={`w-full h-full border-none pointer-events-auto ${isResizingState ? 'pointer-events-none' : ''}`} title={`Tab ${tab.id}`} sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals" />
             </div>
           )}
         </div>

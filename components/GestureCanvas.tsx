@@ -502,7 +502,7 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCu
       <video
         ref={videoRef}
         className="absolute top-0 left-0 w-full h-full object-cover opacity-0 pointer-events-none"
-        playsInline autoPlay muted
+        playsInline autoPlay muted crossOrigin="anonymous"
         style={{ transform: 'scaleX(-1)' }}
       />
       <canvas
