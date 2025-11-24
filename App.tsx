@@ -1,13 +1,17 @@
+
 import React, { useState } from 'react';
 import GestureCanvas from './components/GestureCanvas';
 import Instructions from './components/Instructions';
 import BrowseScreen from './components/BrowseScreen';
-import { GameState, ScreenMode, CursorData } from './types';
-import { LayoutGrid, Globe, Power, Loader2, Camera, AlertTriangle } from 'lucide-react';
+import { GameState, ScreenMode, CursorData, PlaygroundActivity } from './types';
+import { LayoutGrid, Globe, Power, Loader2, Camera, AlertTriangle, ChevronDown, Bot, Shapes } from 'lucide-react';
 
 function App() {
   const [gameState, setGameState] = useState<GameState>(GameState.LOADING_MODEL);
   const [screenMode, setScreenMode] = useState<ScreenMode>('PLAYGROUND');
+  const [playgroundActivity, setPlaygroundActivity] = useState<PlaygroundActivity>('SHAPES');
+  const [isActivityMenuOpen, setIsActivityMenuOpen] = useState(false);
+  
   const [cursorData, setCursorData] = useState<CursorData | null>(null);
   const [hasStarted, setHasStarted] = useState(false);
 
@@ -108,6 +112,37 @@ function App() {
             </button>
           </div>
 
+          {/* PLAYGROUND ACTIVITY SWITCHER (Only in Playground Mode) */}
+          {screenMode === 'PLAYGROUND' && (
+              <div className="absolute top-4 right-20 z-40">
+                  <button 
+                    onClick={() => setIsActivityMenuOpen(!isActivityMenuOpen)}
+                    className="flex items-center gap-2 bg-cyan-950/50 backdrop-blur p-2 border border-cyan-500/50 text-cyan-300 hover:text-cyan-100 hover:bg-cyan-900/80 transition-all"
+                  >
+                     {playgroundActivity === 'SHAPES' ? <Shapes size={18}/> : <Bot size={18}/>}
+                     <span className="text-xs font-bold font-mono">{playgroundActivity === 'SHAPES' ? 'GRAVITY' : 'MECHA'}</span>
+                     <ChevronDown size={14} className={`transition-transform ${isActivityMenuOpen ? 'rotate-180' : ''}`}/>
+                  </button>
+
+                  {isActivityMenuOpen && (
+                      <div className="absolute top-full right-0 mt-2 w-40 bg-slate-950/90 border border-cyan-500/30 shadow-xl backdrop-blur-md flex flex-col p-1 gap-1">
+                          <button 
+                             onClick={() => { setPlaygroundActivity('SHAPES'); setIsActivityMenuOpen(false); }}
+                             className={`flex items-center gap-2 p-2 text-xs font-mono font-bold hover:bg-cyan-900/50 text-left transition-colors ${playgroundActivity === 'SHAPES' ? 'text-cyan-300 bg-cyan-950' : 'text-slate-400'}`}
+                          >
+                             <Shapes size={14} /> GRAVITY SHAPES
+                          </button>
+                          <button 
+                             onClick={() => { setPlaygroundActivity('ROBOT'); setIsActivityMenuOpen(false); }}
+                             className={`flex items-center gap-2 p-2 text-xs font-mono font-bold hover:bg-cyan-900/50 text-left transition-colors ${playgroundActivity === 'ROBOT' ? 'text-cyan-300 bg-cyan-950' : 'text-slate-400'}`}
+                          >
+                             <Bot size={14} /> MECHA HAND
+                          </button>
+                      </div>
+                  )}
+              </div>
+          )}
+
           <div className="absolute inset-0 z-20">
             {screenMode === 'PLAYGROUND' && <Instructions />}
             {screenMode === 'BROWSE' && <BrowseScreen cursorData={cursorData} />}
@@ -121,6 +156,7 @@ function App() {
         <GestureCanvas 
           onStateChange={setGameState} 
           mode={screenMode}
+          playgroundActivity={playgroundActivity}
           onCursorUpdate={setCursorData} 
         />
       </div>

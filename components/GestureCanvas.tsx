@@ -1,21 +1,24 @@
+
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
-import { GameState, PhysicsObject, ScreenMode, CursorData } from '../types';
+import { GameState, PhysicsObject, ScreenMode, CursorData, PlaygroundActivity } from '../types';
 import { updatePhysics, smoothPointAdaptive, distance, smoothScalar } from '../utils/physics';
 
 interface GestureCanvasProps {
   onStateChange: (state: GameState) => void;
   mode: ScreenMode;
+  playgroundActivity: PlaygroundActivity;
   onCursorUpdate?: (data: CursorData) => void;
 }
 
-const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCursorUpdate }) => {
+const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, playgroundActivity, onCursorUpdate }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const requestRef = useRef<number>(0);
   
   // CRITICAL: Ref to track mode inside the animation loop without stale closures
   const modeRef = useRef<ScreenMode>(mode);
+  const activityRef = useRef<PlaygroundActivity>(playgroundActivity);
   
   const handLandmarkerRef = useRef<HandLandmarker | null>(null);
   const grabbedObjectIdRef = useRef<number | null>(null);
@@ -23,11 +26,16 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCu
   const releaseDebounceRef = useRef<number>(0); 
   const prevHandPosRef = useRef<{x: number, y: number} | null>(null);
   const velocityRef = useRef<number>(0);
+  const rawLandmarksRef = useRef<any>(null); // Store raw landmarks for 3D render
 
   // Update ref when prop changes
   useEffect(() => {
     modeRef.current = mode;
   }, [mode]);
+
+  useEffect(() => {
+    activityRef.current = playgroundActivity;
+  }, [playgroundActivity]);
 
   // Initialize 3 Sci-Fi Objects
   const objectsRef = useRef<PhysicsObject[]>([
@@ -159,6 +167,7 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCu
     
     // CRITICAL: Always read from ref to get the latest mode in the loop
     const currentMode = modeRef.current;
+    const currentActivity = activityRef.current;
 
     if (canvas.width !== window.innerWidth || canvas.height !== window.innerHeight) {
       canvas.width = window.innerWidth;
@@ -182,6 +191,7 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCu
     if (results && results.landmarks && results.landmarks.length > 0) {
       missedFramesRef.current = 0;
       const landmarks = results.landmarks[0];
+      rawLandmarksRef.current = landmarks;
       
       const wrist = landmarks[0];
       const thumbTip = landmarks[4];
@@ -274,23 +284,19 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCu
       const virtualTipY = knuckleMidY + palmDirY * 1.6;
 
       // --- INTELLIGENT CORNER REMAPPING ---
-      // Map a smaller "safe zone" of the camera to the full screen.
-      // This allows reaching corners without the hand exiting the camera frame.
-      const HORIZONTAL_MARGIN = 0.18; // 18% margin on left/right
-      const VERTICAL_MARGIN = 0.22;   // 22% margin on top/bottom
+      const HORIZONTAL_MARGIN = 0.18; 
+      const VERTICAL_MARGIN = 0.22;   
       
-      // Remap (0.18 -> 0.0) and (0.82 -> 1.0)
       let safeX = (virtualTipX - HORIZONTAL_MARGIN) / (1 - 2 * HORIZONTAL_MARGIN);
       let safeY = (virtualTipY - VERTICAL_MARGIN) / (1 - 2 * VERTICAL_MARGIN);
 
-      // Clamp values (so we don't go off screen if we really stretch)
       safeX = Math.max(0, Math.min(1, safeX));
       safeY = Math.max(0, Math.min(1, safeY));
 
-      const rawTargetX = (1 - safeX) * canvas.width; // Mirroring happens here
+      const rawTargetX = (1 - safeX) * canvas.width; 
       const rawTargetY = safeY * canvas.height;
 
-      // Precision Smoothing for Browser
+      // Precision Smoothing
       const minAlpha = currentMode === 'BROWSE' ? 0.05 : (isPinching ? 0.35 : 0.12);
       const maxAlpha = currentMode === 'BROWSE' ? 0.2 : 0.75;
       
@@ -304,8 +310,8 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCu
       cursor.x = smoothed.x;
       cursor.y = smoothed.y;
 
-      // OBJECT INTERACTION (Playground Only)
-      if (currentMode === 'PLAYGROUND') {
+      // OBJECT INTERACTION (Playground Only - Shapes Activity)
+      if (currentMode === 'PLAYGROUND' && currentActivity === 'SHAPES') {
         objects.forEach(obj => obj.isHovered = false);
 
         let activeObject: PhysicsObject | null = null;
@@ -371,10 +377,11 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCu
           cursor.visible = false;
           cursor.pinching = false;
           grabbedObjectIdRef.current = null;
+          rawLandmarksRef.current = null;
       }
     }
 
-    if (currentMode === 'PLAYGROUND') {
+    if (currentMode === 'PLAYGROUND' && currentActivity === 'SHAPES') {
         objects.forEach(obj => updatePhysics(obj, { width: canvas.width, height: canvas.height }));
     }
 
@@ -385,10 +392,15 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCu
       drawGrid(ctx, canvas.width, canvas.height, currentMode);
       
       if (currentMode === 'PLAYGROUND') {
-        objects.forEach(obj => drawSciFiObject(ctx, obj));
+        if (currentActivity === 'SHAPES') {
+            objects.forEach(obj => drawSciFiObject(ctx, obj));
+        } else if (currentActivity === 'ROBOT') {
+            if (rawLandmarksRef.current) drawRoboticHand(ctx, rawLandmarksRef.current, canvas.width, canvas.height);
+        }
       }
 
-      if (cursor.visible) {
+      // Draw Cursor only if NOT in Robot mode (Hand IS the cursor) or if in Browse
+      if (cursor.visible && (currentMode === 'BROWSE' || currentActivity === 'SHAPES')) {
         drawHudCursor(ctx, cursor.x, cursor.y, cursor.pinching, cursor.mode, cursor.pinchVal, cursor.releaseProgress, currentMode, cursor.tilt);
       }
     }
@@ -410,6 +422,108 @@ const GestureCanvas: React.FC<GestureCanvasProps> = ({ onStateChange, mode, onCu
     for (let y = gridOffsetRef.current; y <= height; y += gridSize) {
       ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke();
     }
+    ctx.restore();
+  };
+
+  const drawRoboticHand = (ctx: CanvasRenderingContext2D, landmarks: any[], width: number, height: number) => {
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    // Helper to map normalized coords to screen with perspective
+    const map = (lm: any) => {
+        // Z is relative depth. We use it to simulate 3D perspective scaling.
+        // Negative Z is closer to camera in MediaPipe.
+        const zScale = 1 + (Math.abs(lm.z) * 4); // Scale up if closer
+        const x = (1 - lm.x) * width; // Mirror X
+        const y = lm.y * height;
+        return { x, y, scale: zScale, z: lm.z };
+    };
+
+    const points = landmarks.map(map);
+    const wrist = points[0];
+
+    // Connectivity Graph for Fingers
+    const fingers = [
+        [0, 1, 2, 3, 4],       // Thumb
+        [0, 5, 6, 7, 8],       // Index
+        [0, 9, 10, 11, 12],    // Middle
+        [0, 13, 14, 15, 16],   // Ring
+        [0, 17, 18, 19, 20]    // Pinky
+    ];
+
+    // DRAW PALM MESH
+    ctx.strokeStyle = 'rgba(6, 182, 212, 0.3)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    ctx.lineTo(points[5].x, points[5].y);
+    ctx.lineTo(points[17].x, points[17].y);
+    ctx.closePath();
+    ctx.stroke();
+    
+    // Grid Lines inside Palm
+    ctx.beginPath();
+    ctx.moveTo(points[5].x, points[5].y);
+    ctx.lineTo(points[17].x, points[17].y);
+    ctx.stroke();
+
+    // DRAW FINGERS
+    fingers.forEach(indices => {
+        // Draw Struts (Bones)
+        ctx.beginPath();
+        for (let i = 0; i < indices.length - 1; i++) {
+            const curr = points[indices[i]];
+            const next = points[indices[i+1]];
+            ctx.moveTo(curr.x, curr.y);
+            ctx.lineTo(next.x, next.y);
+        }
+        ctx.lineWidth = 6;
+        ctx.strokeStyle = 'rgba(6, 182, 212, 0.2)'; // Outer Glow
+        ctx.stroke();
+
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = '#22D3EE'; // Core Beam
+        ctx.stroke();
+        
+        // Draw Joints (Knuckles)
+        indices.forEach((idx, pos) => {
+            const p = points[idx];
+            const size = (pos === 0 ? 10 : 6) * p.scale; // Wrist is larger
+            
+            // Joint Armor
+            ctx.beginPath();
+            ctx.fillStyle = '#0f172a';
+            ctx.arc(p.x, p.y, size, 0, Math.PI * 2);
+            ctx.fill();
+            
+            ctx.beginPath();
+            if (pos === 4) { // Fingertips
+                 ctx.strokeStyle = '#F472B6'; // Pink for tips
+                 ctx.arc(p.x, p.y, size * 0.8, 0, Math.PI * 2);
+            } else {
+                 ctx.strokeStyle = '#22D3EE'; // Cyan for joints
+                 // Draw Hexagon-ish shape
+                 const sides = 6;
+                 for (let k = 0; k < sides; k++) {
+                     const angle = (k * 2 * Math.PI) / sides;
+                     const hx = p.x + size * 0.8 * Math.cos(angle);
+                     const hy = p.y + size * 0.8 * Math.sin(angle);
+                     if (k===0) ctx.moveTo(hx, hy); else ctx.lineTo(hx, hy);
+                 }
+                 ctx.closePath();
+            }
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            
+            // Inner Light
+            ctx.beginPath();
+            ctx.fillStyle = '#fff';
+            ctx.arc(p.x, p.y, size * 0.2, 0, Math.PI * 2);
+            ctx.fill();
+        });
+    });
+
     ctx.restore();
   };
 

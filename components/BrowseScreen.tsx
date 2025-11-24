@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import { CursorData, JarvisCommand } from '../types';
 import { Plus, Maximize2, Minimize2, Mic, Search, Globe, X, Minus, RotateCw, Scaling } from 'lucide-react';
@@ -31,21 +32,21 @@ const BrowseScreen: React.FC<BrowseScreenProps> = ({ cursorData }) => {
       y: window.innerHeight * 0.2,
       width: 800,
       height: 500,
-      title: 'Wikipedia',
-      url: 'https://www.wikipedia.org',
+      title: 'Google',
+      url: 'https://www.google.com/webhp?igu=1',
       isMaximized: false,
       isCollapsed: false,
-      zIndex: 1,
+      zIndex: 10,
       inputValue: '',
       isListening: false,
       renderKey: 0
     }
   ]);
   
-  const [maxZ, setMaxZ] = useState(1);
+  const [maxZ, setMaxZ] = useState(10);
   const [ripples, setRipples] = useState<{id: number, x: number, y: number, double: boolean}[]>([]);
   const [isResizingState, setIsResizingState] = useState(false);
-  const [isAnyInputActive, setIsAnyInputActive] = useState(false); // Track for Jarvis
+  const [isAnyInputActive, setIsAnyInputActive] = useState(false); 
   
   const dragRef = useRef<{ tabId: number; startMouseX: number; startMouseY: number; initialTabX: number; initialTabY: number; isDragging: boolean; } | null>(null);
   const resizeRef = useRef<{ tabId: number; startX: number; startY: number; startW: number; startH: number; startTabY: number; } | null>(null);
@@ -66,45 +67,61 @@ const BrowseScreen: React.FC<BrowseScreenProps> = ({ cursorData }) => {
     setIsAnyInputActive(active);
   }, [tabs]);
 
-  const createTab = (url: string = 'https://www.wikipedia.org') => {
+  const bringToFront = (id: number) => {
+      setTabs(prev => {
+          const tab = prev.find(t => t.id === id);
+          if (!tab || tab.zIndex === maxZ) return prev; // Already on top
+          return prev.map(t => t.id === id ? { ...t, zIndex: maxZ + 1 } : t);
+      });
+      setMaxZ(prev => prev + 1);
+  };
+
+  const createTab = (url: string = 'https://www.google.com/webhp?igu=1', title: string = 'New Tab') => {
     const newId = Date.now();
-    setTabs(prev => [...prev, {
-        id: newId,
-        x: window.innerWidth * 0.15 + (prev.length * 40),
-        y: window.innerHeight * 0.15 + (prev.length * 40),
-        width: 800, height: 500,
-        title: 'New Tab', url: url,
-        isMaximized: false, isCollapsed: false, zIndex: maxZ + 1,
-        inputValue: '', isListening: false, renderKey: 0
-    }]);
+    setTabs(prev => {
+        const nextZ = maxZ + 1;
+        // Offset new tabs slightly so they don't stack perfectly on top
+        const offset = (prev.length % 5) * 30; 
+        return [...prev, {
+            id: newId,
+            x: window.innerWidth * 0.1 + offset,
+            y: window.innerHeight * 0.15 + offset,
+            width: 800, height: 500,
+            title: title, url: url,
+            isMaximized: false, isCollapsed: false, zIndex: nextZ,
+            inputValue: '', isListening: false, renderKey: 0
+        }];
+    });
     setMaxZ(z => z + 1);
   };
 
   const closeTab = (id: number) => setTabs(prev => prev.filter(t => t.id !== id));
   
   const toggleMaximize = (id: number) => {
-    setTabs(prev => prev.map(t => t.id === id ? { ...t, isMaximized: !t.isMaximized, isCollapsed: false, zIndex: maxZ + 1 } : t));
-    setMaxZ(z => z + 1);
+    bringToFront(id);
+    setTabs(prev => prev.map(t => t.id === id ? { ...t, isMaximized: !t.isMaximized, isCollapsed: false } : t));
   };
 
   const toggleCollapse = (id: number) => {
-    setTabs(prev => prev.map(t => t.id === id ? { ...t, isCollapsed: !t.isCollapsed, isMaximized: false, zIndex: maxZ + 1 } : t));
-    setMaxZ(z => z + 1);
+    bringToFront(id);
+    setTabs(prev => prev.map(t => t.id === id ? { ...t, isCollapsed: !t.isCollapsed, isMaximized: false } : t));
   };
 
-  const reloadTab = (id: number) => setTabs(prev => prev.map(t => t.id === id ? { ...t, renderKey: t.renderKey + 1 } : t));
+  const reloadTab = (id: number) => {
+      setTabs(prev => prev.map(t => t.id === id ? { ...t, renderKey: t.renderKey + 1 } : t));
+  };
 
   const startListening = (tabId: number) => {
-    setTabs(t => t.map(ti => ti.id === tabId ? { ...ti, zIndex: maxZ + 1 } : ti));
-    setMaxZ(z => z + 1);
+    bringToFront(tabId);
 
     if (!('webkitSpeechRecognition' in window)) {
        const text = prompt("Enter Search Query / URL:");
        if (text) {
-         const url = text.startsWith('http') ? text : `https://en.wikipedia.org/wiki/${encodeURIComponent(text)}`;
+         const url = text.startsWith('http') ? text : `https://www.google.com/search?q=${encodeURIComponent(text)}&igu=1`;
          setTabs(prev => prev.map(t => t.id === tabId ? { 
             ...t, inputValue: text, 
             url: url,
+            title: text,
             renderKey: t.renderKey + 1
          } : t));
        }
@@ -117,10 +134,11 @@ const BrowseScreen: React.FC<BrowseScreenProps> = ({ cursorData }) => {
 
     recognition.onresult = (event: any) => {
       const text = event.results[0][0].transcript;
-      const url = `https://en.wikipedia.org/wiki/${encodeURIComponent(text)}`;
+      const url = `https://www.google.com/search?q=${encodeURIComponent(text)}&igu=1`;
       setTabs(prev => prev.map(t => t.id === tabId ? { 
           ...t, inputValue: text, isListening: false,
           url: url,
+          title: text,
           renderKey: t.renderKey + 1
       } : t));
     };
@@ -129,45 +147,109 @@ const BrowseScreen: React.FC<BrowseScreenProps> = ({ cursorData }) => {
     recognition.start();
   };
 
-  // JARVIS COMMAND HANDLER
+  // JARVIS COMMAND HANDLER - ATOMIC UPDATES
   const handleJarvisCommand = (cmd: JarvisCommand) => {
-      switch(cmd.action) {
-          case 'OPEN_TAB':
-              createTab(cmd.payload || 'https://www.wikipedia.org');
-              break;
-          case 'CLOSE_TAB':
-              // Close highest z-index tab
-              if (tabs.length > 0) {
-                  const topTab = tabs.reduce((prev, current) => (prev.zIndex > current.zIndex) ? prev : current);
-                  closeTab(topTab.id);
-              }
-              break;
-          case 'SEARCH':
-              if (cmd.payload && tabs.length > 0) {
-                   // Update top tab
-                   const topTab = tabs.reduce((prev, current) => (prev.zIndex > current.zIndex) ? prev : current);
-                   const url = `https://en.wikipedia.org/wiki/${encodeURIComponent(cmd.payload)}`;
-                   setTabs(prev => prev.map(t => t.id === topTab.id ? { 
-                        ...t, inputValue: cmd.payload || '', url, renderKey: t.renderKey + 1 
-                   } : t));
-              } else if (cmd.payload) {
-                   // Create new if none exist
-                   const url = `https://en.wikipedia.org/wiki/${encodeURIComponent(cmd.payload)}`;
-                   createTab(url);
-              }
-              break;
-          case 'SCROLL_DOWN':
-              window.scrollBy({ top: 300, behavior: 'smooth'}); 
-              // Dispatch key to active element
-              window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
-              break;
-          case 'SCROLL_UP':
-              window.scrollBy({ top: -300, behavior: 'smooth'});
-              window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }));
-              break;
-          default:
-              break;
-      }
+      console.log("Processing Command:", cmd);
+
+      setTabs(currentTabs => {
+        const nextZ = maxZ + 1; // Increment Z globally (side effect handled via effect or relaxed consistency here)
+        
+        const getTab = (idx?: number) => {
+            if (idx !== undefined && idx !== null) {
+                // strict mapping: tab 1 is index 0
+                return currentTabs[idx - 1]; 
+            }
+            // default to active
+            return [...currentTabs].sort((a,b) => b.zIndex - a.zIndex)[0];
+        };
+
+        const targetTab = getTab(cmd.targetIndex);
+
+        switch(cmd.action) {
+            case 'OPEN_TAB': {
+                const newId = Date.now();
+                const offset = (currentTabs.length % 5) * 30; 
+                setMaxZ(z => z + 1); // safe side effect
+                return [...currentTabs, {
+                    id: newId,
+                    x: window.innerWidth * 0.1 + offset,
+                    y: window.innerHeight * 0.15 + offset,
+                    width: 800, height: 500,
+                    title: cmd.payload ? 'New Tab' : 'Google', 
+                    url: cmd.payload || 'https://www.google.com/webhp?igu=1',
+                    isMaximized: false, isCollapsed: false, zIndex: nextZ,
+                    inputValue: '', isListening: false, renderKey: 0
+                }];
+            }
+            case 'CLOSE_TAB':
+                if (targetTab) return currentTabs.filter(t => t.id !== targetTab.id);
+                return currentTabs;
+            
+            case 'SWITCH_TAB':
+                if (targetTab) {
+                    setMaxZ(z => z + 1);
+                    return currentTabs.map(t => t.id === targetTab.id ? { ...t, zIndex: nextZ } : t);
+                }
+                return currentTabs;
+
+            case 'MINIMIZE_TAB':
+                if (targetTab) return currentTabs.map(t => t.id === targetTab.id ? { ...t, isCollapsed: true, isMaximized: false } : t);
+                return currentTabs;
+            
+            case 'MAXIMIZE_TAB':
+                if (targetTab) {
+                    setMaxZ(z => z + 1);
+                    return currentTabs.map(t => t.id === targetTab.id ? { ...t, isMaximized: true, isCollapsed: false, zIndex: nextZ } : t);
+                }
+                return currentTabs;
+
+            case 'NAVIGATE':
+                if (targetTab && cmd.payload) {
+                    setMaxZ(z => z + 1);
+                    return currentTabs.map(t => t.id === targetTab.id ? { 
+                         ...t, inputValue: cmd.payload || '', url: cmd.payload || '', title: 'Loading...', renderKey: t.renderKey + 1, zIndex: nextZ 
+                    } : t);
+                } else if (!targetTab && cmd.payload) {
+                    // Create if not found
+                     const newId = Date.now();
+                     setMaxZ(z => z + 1);
+                     return [...currentTabs, {
+                        id: newId, x: 100, y: 100, width: 800, height: 500,
+                        title: 'New Tab', url: cmd.payload,
+                        isMaximized: false, isCollapsed: false, zIndex: nextZ, inputValue: '', isListening: false, renderKey: 0
+                     }];
+                }
+                return currentTabs;
+
+            case 'SEARCH':
+                if (cmd.payload) {
+                   const url = `https://www.google.com/search?q=${encodeURIComponent(cmd.payload)}&igu=1`;
+                   if (targetTab) {
+                       setMaxZ(z => z + 1);
+                       return currentTabs.map(t => t.id === targetTab.id ? { 
+                            ...t, inputValue: cmd.payload || '', url, title: cmd.payload || 'Search', renderKey: t.renderKey + 1, zIndex: nextZ 
+                       } : t);
+                   } else {
+                       const newId = Date.now();
+                       setMaxZ(z => z + 1);
+                       return [...currentTabs, {
+                           id: newId, x: 100, y: 100, width: 800, height: 500,
+                           title: cmd.payload || 'Search', url, isMaximized: false, isCollapsed: false, zIndex: nextZ, inputValue: '', isListening: false, renderKey: 0
+                       }];
+                   }
+                }
+                return currentTabs;
+                
+            case 'SCROLL_DOWN':
+                window.scrollBy({ top: 300, behavior: 'smooth'}); 
+                return currentTabs;
+            case 'SCROLL_UP':
+                window.scrollBy({ top: -300, behavior: 'smooth'});
+                return currentTabs;
+            default:
+                return currentTabs;
+        }
+      });
   };
 
   const scrollIntervalRef = useRef<number | null>(null);
@@ -177,11 +259,15 @@ const BrowseScreen: React.FC<BrowseScreenProps> = ({ cursorData }) => {
         if (!scrollIntervalRef.current) {
             scrollIntervalRef.current = window.setInterval(() => {
                 const speed = cursorData.tilt * 30;
+                // Attempt to scroll element under cursor
                 const el = document.elementFromPoint(cursorData.x, cursorData.y);
                 if (el) {
                     el.scrollBy({ top: speed, behavior: 'auto' });
+                    // Try to send events to iframes if possible
                     el.dispatchEvent(new WheelEvent('wheel', { deltaY: speed * 2, bubbles: true }));
-                    if (el.tagName === 'IFRAME') (el as HTMLIFrameElement).contentWindow?.focus();
+                    if (el.tagName === 'IFRAME') {
+                        try { (el as HTMLIFrameElement).contentWindow?.focus(); } catch(e) {}
+                    }
                 }
                 const key = speed > 0 ? 'ArrowDown' : 'ArrowUp';
                 window.dispatchEvent(new KeyboardEvent('keydown', { key, code: key, bubbles: true }));
@@ -193,6 +279,7 @@ const BrowseScreen: React.FC<BrowseScreenProps> = ({ cursorData }) => {
     return () => { if (scrollIntervalRef.current) clearInterval(scrollIntervalRef.current); };
   }, [cursorData]);
 
+  // GESTURE HANDLER
   useEffect(() => {
     if (!cursorData) return;
 
@@ -201,6 +288,7 @@ const BrowseScreen: React.FC<BrowseScreenProps> = ({ cursorData }) => {
     let isClick = false;
     let isDoubleClick = false;
 
+    // Detect Click (Release after short pinch)
     if (prev.wasPinching && !pinching) {
       const duration = timestamp - prev.pinchStartTime;
       const moveDist = Math.hypot(x - prev.startX, y - prev.startY);
@@ -219,6 +307,8 @@ const BrowseScreen: React.FC<BrowseScreenProps> = ({ cursorData }) => {
 
     if (pinching && !prev.wasPinching) {
       pinchStateRef.current = { ...prev, wasPinching: true, pinchStartTime: timestamp, startX: x, startY: y };
+      
+      // Sort tabs by visual order (z-index) to interact with top-most first
       const sortedTabs = [...tabs].sort((a, b) => b.zIndex - a.zIndex);
       
       for (const tab of sortedTabs) {
@@ -229,14 +319,14 @@ const BrowseScreen: React.FC<BrowseScreenProps> = ({ cursorData }) => {
         if (Math.hypot(x - rx, y - ry) < 60) {
              resizeRef.current = { tabId: tab.id, startX: x, startY: y, startW: tab.width, startH: tab.height, startTabY: tab.y };
              setIsResizingState(true);
-             if(tab.zIndex !== maxZ) { setTabs(t => t.map(ti => ti.id === tab.id ? { ...ti, zIndex: maxZ + 1 } : ti)); setMaxZ(z => z + 1); }
+             bringToFront(tab.id);
              break; 
         }
 
         // DRAG: Header
         if (x >= tab.x && x <= tab.x + tab.width && y >= tab.y && y <= tab.y + 48) {
           dragRef.current = { tabId: tab.id, startMouseX: x, startMouseY: y, initialTabX: tab.x, initialTabY: tab.y, isDragging: false };
-          if(tab.zIndex !== maxZ) { setTabs(t => t.map(ti => ti.id === tab.id ? { ...ti, zIndex: maxZ + 1 } : ti)); setMaxZ(z => z + 1); }
+          bringToFront(tab.id);
           break;
         }
       }
@@ -244,25 +334,28 @@ const BrowseScreen: React.FC<BrowseScreenProps> = ({ cursorData }) => {
       pinchStateRef.current.wasPinching = false;
     }
 
+    // Handle Resize
     if (pinching && resizeRef.current) {
         const { tabId, startX, startY, startW, startH, startTabY } = resizeRef.current;
         const dx = x - startX;
         const dy = y - startY;
-        // Dragging Top-Right: Width increases (dx), Height increases (dy inverted, actually Top decreases)
         const newWidth = Math.max(300, startW + dx);
         const newHeight = Math.max(200, startH - dy); 
         const newY = startTabY + dy; 
         setTabs(prev => prev.map(t => t.id === tabId ? { ...t, width: newWidth, height: newHeight, y: newY } : t));
     }
 
+    // Handle Drag
     if (pinching && dragRef.current) {
       const { tabId, startMouseX, startMouseY, initialTabX, initialTabY, isDragging } = dragRef.current;
+      // Drag Deadzone
       if (!isDragging && Math.hypot(x - startMouseX, y - startMouseY) > 40) dragRef.current.isDragging = true;
       if (dragRef.current.isDragging) {
           setTabs(prev => prev.map(t => t.id === tabId ? { ...t, x: initialTabX + (x - startMouseX), y: initialTabY + (y - startMouseY) } : t));
       }
     }
 
+    // Handle Clicks
     if (isClick || isDoubleClick) {
       setRipples(prev => [...prev, { id: Date.now(), x, y, double: isDoubleClick }]);
       setTimeout(() => setRipples(prev => prev.slice(1)), 600);
@@ -272,6 +365,7 @@ const BrowseScreen: React.FC<BrowseScreenProps> = ({ cursorData }) => {
         createTab(); return;
       }
 
+      // Check clicks on Tabs (Top-most first)
       const sortedTabs = [...tabs].sort((a, b) => b.zIndex - a.zIndex);
       for (const tab of sortedTabs) {
         const tx = tab.isMaximized ? 0 : tab.x;
@@ -279,28 +373,49 @@ const BrowseScreen: React.FC<BrowseScreenProps> = ({ cursorData }) => {
         const tw = tab.isMaximized ? window.innerWidth : tab.width;
         const th = (tab.isMaximized || !tab.isCollapsed) ? (tab.isMaximized ? window.innerHeight : tab.height) : 48;
         
+        // Bounds check
         if (x >= tx && x <= tx + tw && y >= ty && y <= ty + th) {
+             bringToFront(tab.id); // Click brings to front
+
              if (y <= ty + 48) {
+                // Header Controls
                 if (x > tx + tw - 40) { closeTab(tab.id); return; }
                 if (x > tx + tw - 80) { toggleMaximize(tab.id); return; }
                 if (x > tx + tw - 120) { toggleCollapse(tab.id); return; }
                 if (x > tx + tw - 160) { reloadTab(tab.id); return; }
+                
+                // Address Bar Click
                 const inputRect = { x: tx + 50, y: ty + 8, w: tw - 240, h: 32 };
                 if (x >= inputRect.x && x <= inputRect.x + inputRect.w && y >= inputRect.y && y <= inputRect.y + inputRect.h) startListening(tab.id);
              } else {
+                 // Content Click
+                 // Try to simulate focus or click on native elements if possible
                  const el = document.elementFromPoint(x, y);
                  if (el) { (el as HTMLElement).click(); (el as HTMLElement).focus(); }
              }
-             return; 
+             return; // Handled click on top-most tab, stop checking others
         }
       }
     }
   }, [cursorData, tabs, maxZ]);
 
+  // Prepare Context for Jarvis
+  // We strictly map Array Index + 1 to "Tab N" for human readability
+  const jarvisContext = tabs.map((t, idx) => ({ 
+      index: idx + 1, 
+      title: t.title, 
+      url: t.url, 
+      active: t.zIndex === maxZ 
+  }));
+
   return (
     <div className="absolute inset-0 pointer-events-none overflow-hidden">
       {/* JARVIS INTEGRATION */}
-      <JarvisAssistant onCommand={handleJarvisCommand} isInputActive={isAnyInputActive} />
+      <JarvisAssistant 
+         onCommand={handleJarvisCommand} 
+         isInputActive={isAnyInputActive} 
+         tabs={jarvisContext}
+      />
 
       {ripples.map(r => (
           <div key={r.id} className={`absolute rounded-full border-2 z-[200] animate-[ping_0.6s_ease-out_forwards] ${r.double ? 'border-pink-400 bg-pink-400/20' : 'border-cyan-400 bg-cyan-400/20'}`} style={{ left: r.x - 25, top: r.y - 25, width: 50, height: 50 }} />
@@ -312,14 +427,16 @@ const BrowseScreen: React.FC<BrowseScreenProps> = ({ cursorData }) => {
       >
         <Plus className="text-cyan-200 w-8 h-8" />
       </div>
-      {tabs.map(tab => (
+      {tabs.map((tab, idx) => (
         <div
           key={tab.id}
           className={`absolute flex flex-col bg-slate-900 border border-cyan-500/50 shadow-2xl transition-all duration-75 pointer-events-auto ${tab.isMaximized ? 'inset-4 z-50' : 'rounded-lg'} ${isResizingState ? 'select-none' : ''}`}
           style={{ zIndex: tab.zIndex, left: tab.isMaximized ? 0 : tab.x, top: tab.isMaximized ? 0 : tab.y, width: tab.isMaximized ? '100%' : tab.width, height: (tab.isMaximized || !tab.isCollapsed) ? (tab.isMaximized ? '100%' : tab.height) : 48 }}
         >
           <div className={`h-12 bg-slate-800/90 border-b border-cyan-500/30 flex items-center px-4 gap-4 select-none ${tab.isMaximized ? '' : 'cursor-move'}`}>
-             <div className="p-1.5 bg-cyan-950 rounded text-cyan-400"><Globe size={16} /></div>
+             <div className="p-1.5 bg-cyan-950 rounded text-cyan-400 font-mono text-[10px] font-bold">
+                TAB {String(idx + 1).padStart(2, '0')}
+             </div>
              <div className="flex-1 h-8 bg-slate-950 border border-cyan-900 rounded flex items-center px-3 gap-2 relative group overflow-hidden cursor-pointer hover:bg-slate-900" onClick={() => startListening(tab.id)}>
                 {tab.isListening ? <Mic size={14} className="text-red-400 animate-pulse"/> : <Search size={14} className="text-slate-500"/>}
                 <span className="text-xs font-mono text-cyan-100 truncate w-full">{tab.isListening ? 'Listening...' : (tab.inputValue || tab.title)}</span>

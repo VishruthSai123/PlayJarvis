@@ -1,3 +1,4 @@
+
 export interface Point {
   x: number;
   y: number;
@@ -6,6 +7,8 @@ export interface Point {
 export type ShapeType = 'ORB' | 'CUBE' | 'PYRAMID';
 
 export type ScreenMode = 'PLAYGROUND' | 'BROWSE';
+
+export type PlaygroundActivity = 'SHAPES' | 'ROBOT';
 
 export interface CursorData {
   x: number;
@@ -52,7 +55,8 @@ export enum GameState {
 export type JarvisStatus = 'IDLE' | 'LISTENING' | 'PROCESSING' | 'SPEAKING';
 
 export interface JarvisCommand {
-  action: 'OPEN_TAB' | 'CLOSE_TAB' | 'SEARCH' | 'SCROLL_DOWN' | 'SCROLL_UP' | 'GO_HOME' | 'NONE';
-  payload?: string; // e.g., search query or url
+  action: 'OPEN_TAB' | 'CLOSE_TAB' | 'SWITCH_TAB' | 'MINIMIZE_TAB' | 'MAXIMIZE_TAB' | 'SEARCH' | 'NAVIGATE' | 'SCROLL_DOWN' | 'SCROLL_UP' | 'GO_HOME' | 'STOP_LISTENING' | 'NONE';
+  payload?: string; // e.g., search query, url
+  targetIndex?: number; // Explicit tab index (1, 2, 3...)
   response?: string; // spoken response
 }
