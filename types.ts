@@ -10,6 +10,8 @@ export type ScreenMode = 'PLAYGROUND' | 'BROWSE';
 
 export type PlaygroundActivity = 'SHAPES' | 'ROBOT';
 
+export type MechaObjectType = 'KATANA' | 'BOTTLE' | 'BUCKET' | 'BALL';
+
 export interface CursorData {
   x: number;
   y: number;
@@ -17,7 +19,7 @@ export interface CursorData {
   gestureMode: 'OPEN' | 'POINT' | 'PINCH' | 'LOCKED';
   pinchVal: number;
   timestamp: number;
-  tilt: number; // New property for scroll gesture (Pitch)
+  tilt: number; 
 }
 
 export interface PhysicsObject {
@@ -26,15 +28,29 @@ export interface PhysicsObject {
   y: number;
   vx: number;
   vy: number;
-  radius: number; // Used for physics collision radius
+  radius: number; 
   color: string;
   glowColor: string;
   shape: ShapeType;
   isGrabbed: boolean;
-  isHovered: boolean; // Visual state for when cursor is over it
+  isHovered: boolean; 
   mass: number;
   friction: number;
-  restitution: number; // Bounciness
+  restitution: number; 
+}
+
+export interface MechaObject {
+  id: number;
+  type: MechaObjectType;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  angle: number;
+  angularVelocity: number;
+  isGrabbed: boolean;
+  scale: number;
+  color: string;
 }
 
 export interface HandState {
@@ -51,12 +67,11 @@ export enum GameState {
   ERROR = 'ERROR'
 }
 
-// JARVIS TYPES
 export type JarvisStatus = 'IDLE' | 'LISTENING' | 'PROCESSING' | 'SPEAKING';
 
 export interface JarvisCommand {
   action: 'OPEN_TAB' | 'CLOSE_TAB' | 'SWITCH_TAB' | 'MINIMIZE_TAB' | 'MAXIMIZE_TAB' | 'SEARCH' | 'NAVIGATE' | 'SCROLL_DOWN' | 'SCROLL_UP' | 'GO_HOME' | 'STOP_LISTENING' | 'NONE';
-  payload?: string; // e.g., search query, url
-  targetIndex?: number; // Explicit tab index (1, 2, 3...)
-  response?: string; // spoken response
+  payload?: string; 
+  targetIndex?: number; 
+  response?: string; 
 }

@@ -2,7 +2,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { GoogleGenAI } from "@google/genai";
 import { JarvisStatus, JarvisCommand } from '../types';
-import { Key, Mic, MicOff, AlertCircle, MessageSquare } from 'lucide-react';
+import { Key, Mic, MicOff, AlertCircle, MessageSquare, Link } from 'lucide-react';
 
 interface JarvisAssistantProps {
   onCommand: (cmd: JarvisCommand) => void;
@@ -36,20 +36,18 @@ const JarvisAssistant: React.FC<JarvisAssistantProps> = ({ onCommand, isInputAct
   const apiKeyRef = useRef<string>(apiKey);
   const serperKeyRef = useRef<string>(serperKey);
 
-  // CRITICAL FIX: Ref for onCommand to prevent stale closures in async callbacks
   const onCommandRef = useRef(onCommand);
+  const tabsRef = useRef(tabs);
+  
   useEffect(() => { onCommandRef.current = onCommand; }, [onCommand]);
+  useEffect(() => { tabsRef.current = tabs; }, [tabs]);
 
   const isSpeakingRef = useRef(false);
   const synthRef = useRef<SpeechSynthesis>(window.speechSynthesis);
   const ignoreNextEndRef = useRef(false);
   
-  // SESSION REFS
   const sessionEndTimeRef = useRef<number>(0);
-  const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
-  
-  // CONTEXT REFS
-  const tabsRef = useRef(tabs);
+  const silenceTimerRef = useRef<any>(null);
   const historyRef = useRef<{role: 'user' | 'model', text: string}[]>([]);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -58,9 +56,7 @@ const JarvisAssistant: React.FC<JarvisAssistantProps> = ({ onCommand, isInputAct
   useEffect(() => { statusRef.current = status; }, [status]);
   useEffect(() => { apiKeyRef.current = apiKey; }, [apiKey]);
   useEffect(() => { serperKeyRef.current = serperKey; }, [serperKey]);
-  useEffect(() => { tabsRef.current = tabs; }, [tabs]); 
 
-  // --- CLEANUP ---
   useEffect(() => {
     return () => {
         isMicActiveRef.current = false;
@@ -83,7 +79,6 @@ const JarvisAssistant: React.FC<JarvisAssistantProps> = ({ onCommand, isInputAct
     recognition.lang = 'en-US';
 
     recognition.onstart = () => {
-         console.log("Mic Started Successfully");
          setPermissionDenied(false);
     };
 
@@ -100,7 +95,6 @@ const JarvisAssistant: React.FC<JarvisAssistantProps> = ({ onCommand, isInputAct
 
       const isSessionActive = Date.now() < sessionEndTimeRef.current;
 
-      // WAKE WORD
       if (!isSessionActive && statusRef.current === 'IDLE') {
          const wakeWords = ['jarvis', 'harvest', 'service', 'travis', 'davis', 'javis', 'java', 'hey jarvis'];
          if (wakeWords.some(w => transcript.includes(w))) {
@@ -114,7 +108,6 @@ const JarvisAssistant: React.FC<JarvisAssistantProps> = ({ onCommand, isInputAct
          }
       }
 
-      // COMMAND PROCESSING
       if (isSessionActive || statusRef.current === 'LISTENING') {
           silenceTimerRef.current = setTimeout(() => {
               let cleanQuery = transcript;
@@ -179,7 +172,6 @@ const JarvisAssistant: React.FC<JarvisAssistantProps> = ({ onCommand, isInputAct
              const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
              stream.getTracks().forEach(t => t.stop()); 
           } catch (e: any) {
-             console.error("Microphone Init Failed", e);
              setErrorMessage("Microphone access denied.");
              setPermissionDenied(true);
              return;
@@ -242,7 +234,6 @@ const JarvisAssistant: React.FC<JarvisAssistantProps> = ({ onCommand, isInputAct
         
         const currentTabs = tabsRef.current;
         const tabContext = currentTabs.map(t => `[Tab ${t.index}: ${t.title} (${t.url})${t.active ? ' *ACTIVE*' : ''}]`).join('\n');
-        
         const historyText = historyRef.current.slice(-6).map(h => `${h.role.toUpperCase()}: ${h.text}`).join('\n');
         
         const apiPromise = ai.models.generateContent({
@@ -252,7 +243,6 @@ const JarvisAssistant: React.FC<JarvisAssistantProps> = ({ onCommand, isInputAct
                 maxOutputTokens: 250,
             },
             contents: `System: You are Jarvis, an AI browser assistant.
-            
             INSTRUCTIONS:
             1. Respond naturally to the user.
             2. If an action is required, append a command block at the end using this EXACT format:
@@ -260,23 +250,21 @@ const JarvisAssistant: React.FC<JarvisAssistantProps> = ({ onCommand, isInputAct
             3. Do NOT put the command block in code blocks. Just plain text at the end.
             4. Be concise (under 20 words).
             5. If user asks to "Open [Website]" or "Search [Topic]", use SEARCH action. I will handle the fetching.
-
+            6. Use the Tab Context. If user says "Close Tab 2", ensure targetIndex is 2.
+            
             ACTIONS: OPEN_TAB, CLOSE_TAB, SWITCH_TAB, MINIMIZE_TAB, MAXIMIZE_TAB, SEARCH, NAVIGATE, SCROLL_DOWN, SCROLL_UP, GO_HOME, STOP_LISTENING, NONE.
             
             CONTEXT:
             Current Tabs:
             ${tabContext || "No tabs open."}
-
             History:
             ${historyText}
-
             User Input: "${query}"`
         });
 
         const result: any = await Promise.race([apiPromise, timeoutPromise]);
         let rawText = result.text || "";
         
-        // --- PARSE HYBRID RESPONSE ---
         let responseText = rawText;
         let commandData: JarvisCommand = { action: 'NONE' };
 
@@ -286,29 +274,24 @@ const JarvisAssistant: React.FC<JarvisAssistantProps> = ({ onCommand, isInputAct
         if (match) {
             try {
                 commandData = JSON.parse(match[1]);
-                // Remove command from spoken text
                 responseText = rawText.replace(match[0], '').trim();
             } catch (e) {
                 console.error("Failed to parse command JSON", e);
             }
         }
 
-        // --- INTELLIGENT SERPER INTERCEPT ---
         if (commandData.action === 'SEARCH' && commandData.payload && serperKeyRef.current) {
             setAssistantResponse("Fetching link...");
             const directLink = await fetchSerperResult(commandData.payload);
             if (directLink) {
-                console.log("Serper found link:", directLink);
                 commandData.action = 'NAVIGATE';
                 commandData.payload = directLink;
-                // If response text was generic "Searching...", update it
                 if (responseText.toLowerCase().includes("search")) {
                      responseText = `Opening ${directLink.replace('https://', '').split('/')[0]}...`;
                 }
             }
         }
 
-        // Update History
         historyRef.current = [
             ...historyRef.current, 
             { role: 'user' as const, text: query },
@@ -324,13 +307,16 @@ const JarvisAssistant: React.FC<JarvisAssistantProps> = ({ onCommand, isInputAct
         }
 
         playBeep('SUCCESS');
-        onCommandRef.current(commandData); // USE REF TO PREVENT STALE CLOSURE
-        setAssistantResponse(responseText); // Show clean text
-        speak(responseText, false); // Speak clean text
+        
+        if (commandData.action !== 'NONE') {
+            onCommandRef.current(commandData); 
+        }
+        
+        setAssistantResponse(responseText); 
+        speak(responseText, false); 
         extendSession(); 
 
     } catch (err: any) {
-        console.error("Gemini Error:", err);
         const msg = err.message === 'Timeout' ? "Network slow." : "I couldn't process that.";
         setAssistantResponse(msg);
         speak(msg, false);
@@ -353,7 +339,7 @@ const JarvisAssistant: React.FC<JarvisAssistantProps> = ({ onCommand, isInputAct
     const voices = synthRef.current.getVoices();
     const voice = voices.find(v => v.name.includes('Google UK English Male') || v.name.includes('David') || v.name.toLowerCase().includes('male')) || voices[0];
     if (voice) utterance.voice = voice;
-    utterance.rate = 1.1; 
+    utterance.rate = 1.0;
     utterance.pitch = 0.9; 
     
     utterance.onend = () => {
@@ -414,10 +400,9 @@ const JarvisAssistant: React.FC<JarvisAssistantProps> = ({ onCommand, isInputAct
       }
       setShowKeyInput(false);
       setAssistantResponse("Keys Saved.");
-      speak("System Updated.", false);
+      speak("Connected.", false);
   };
 
-  // --- VISUALIZER ---
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -486,13 +471,16 @@ const JarvisAssistant: React.FC<JarvisAssistantProps> = ({ onCommand, isInputAct
            <div className="bg-slate-900/95 border border-cyan-500/50 p-4 rounded-xl mb-2 w-72 shadow-2xl">
                <div className="text-cyan-400 text-xs font-bold mb-2 uppercase tracking-wider">Configure Neural Link</div>
                <input 
-                 type="password" placeholder="Gemini API Key" value={tempKey} onChange={(e) => setTempKey(e.target.value)}
+                 type="password" placeholder="Paste Gemini API Key" value={tempKey} onChange={(e) => setTempKey(e.target.value)}
                  className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-2 text-xs text-white mb-2 focus:border-cyan-500 outline-none transition-colors"
                />
-               <input 
-                 type="password" placeholder="Serper API Key (Optional)" value={tempSerperKey} onChange={(e) => setTempSerperKey(e.target.value)}
-                 className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-2 text-xs text-white mb-2 focus:border-cyan-500 outline-none transition-colors"
-               />
+               <div className="flex items-center gap-2 mb-2">
+                 <Link size={12} className="text-slate-400"/>
+                 <input 
+                   type="password" placeholder="Serper API Key (Optional)" value={tempSerperKey} onChange={(e) => setTempSerperKey(e.target.value)}
+                   className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-2 text-xs text-white focus:border-cyan-500 outline-none transition-colors"
+                 />
+               </div>
                <button onClick={saveKeys} className="w-full bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold py-2 rounded transition-colors">CONNECT SYSTEM</button>
            </div>
        )}
