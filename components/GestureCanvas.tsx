@@ -1,7 +1,7 @@
 
 import React, { useEffect, useRef, useState, useCallback, useImperativeHandle, forwardRef } from 'react';
 import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
-import { GameState, PhysicsObject, ScreenMode, CursorData, PlaygroundActivity, MechaObject, MechaObjectType } from '../types';
+import { GameState, PhysicsObject, ScreenMode, CursorData, PlaygroundActivity, MechaObject, MechaObjectType, ThreeDObject, Canvas3DState } from '../types';
 import { updatePhysics, smoothPointAdaptive, distance, smoothScalar } from '../utils/physics';
 
 interface GestureCanvasProps {
@@ -9,13 +9,17 @@ interface GestureCanvasProps {
   mode: ScreenMode;
   playgroundActivity: PlaygroundActivity;
   onCursorUpdate?: (data: CursorData) => void;
+  onSelectionChange?: (selectedId: number | null) => void;
 }
 
 export interface GestureCanvasRef {
   spawnMechaObject: (type: MechaObjectType) => void;
+  update3DObject: (obj: ThreeDObject) => void;
+  delete3DObject: (id: number) => void;
+  duplicate3DObject: (obj: ThreeDObject) => void;
 }
 
-const GestureCanvas = forwardRef<GestureCanvasRef, GestureCanvasProps>(({ onStateChange, mode, playgroundActivity, onCursorUpdate }, ref) => {
+const GestureCanvas = forwardRef<GestureCanvasRef, GestureCanvasProps>(({ onStateChange, mode, playgroundActivity, onCursorUpdate, onSelectionChange }, ref) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const requestRef = useRef<number>(0);
@@ -24,10 +28,10 @@ const GestureCanvas = forwardRef<GestureCanvasRef, GestureCanvasProps>(({ onStat
   const activityRef = useRef<PlaygroundActivity>(playgroundActivity);
   
   const handLandmarkerRef = useRef<HandLandmarker | null>(null);
-  const grabbedObjectIdRef = useRef<number | null>(null);
   const missedFramesRef = useRef<number>(0);
   const prevHandPosRef = useRef<{x: number, y: number} | null>(null);
   const rawLandmarksRef = useRef<any>(null); 
+  const secondHandLandmarksRef = useRef<any>(null);
 
   // --- SCI-FI OBJECTS ---
   const objectsRef = useRef<PhysicsObject[]>([
@@ -35,10 +39,23 @@ const GestureCanvas = forwardRef<GestureCanvasRef, GestureCanvasProps>(({ onStat
     { id: 2, x: window.innerWidth * 0.5, y: window.innerHeight * 0.5, vx: 0, vy: 0, radius: 55, color: '#D946EF', glowColor: '#E879F9', shape: 'CUBE', isGrabbed: false, isHovered: false, mass: 1.5, friction: 0.95, restitution: 0.6 },
     { id: 3, x: window.innerWidth * 0.7, y: window.innerHeight * 0.5, vx: 0, vy: 0, radius: 50, color: '#10B981', glowColor: '#34D399', shape: 'PYRAMID', isGrabbed: false, isHovered: false, mass: 0.8, friction: 0.98, restitution: 0.9 }
   ]);
+  const grabbedObjectIdRef = useRef<number | null>(null);
 
   // --- MECHA OBJECTS ---
   const mechaObjectsRef = useRef<MechaObject[]>([]);
   const grabbedMechaIdRef = useRef<number | null>(null);
+
+  // --- 3D STUDIO STATE ---
+  const threeDObjectsRef = useRef<ThreeDObject[]>([
+     { id: 101, type: 'CUBE', x: 0, y: 0, z: 0, rotX: 0, rotY: 0, rotZ: 0, scaleX: 1, scaleY: 1, scaleZ: 1, color: '#F43F5E' },
+     { id: 102, type: 'PYRAMID', x: 200, y: 0, z: 50, rotX: 0, rotY: 0, rotZ: 0, scaleX: 1, scaleY: 1, scaleZ: 1, color: '#34D399' }
+  ]);
+  const canvas3DStateRef = useRef<Canvas3DState>({ camX: 0, camY: -500, camZ: -1000, camRotX: 0.5, camRotY: 0, zoom: 1 });
+  const selected3DObjectIdRef = useRef<number | null>(null);
+  const grabbed3DObjectIdRef = useRef<number | null>(null);
+  const pinchStartRef = useRef<{time: number, x: number, y: number} | null>(null);
+  const initialPinchDistRef = useRef<number>(0);
+  const initialCamZoomRef = useRef<number>(1);
 
   useImperativeHandle(ref, () => ({
     spawnMechaObject: (type: MechaObjectType) => {
@@ -46,12 +63,23 @@ const GestureCanvas = forwardRef<GestureCanvasRef, GestureCanvasProps>(({ onStat
         const obj: MechaObject = {
             id, type, 
             x: window.innerWidth / 2, y: 100, 
-            vx: (Math.random() - 0.5) * 5, vy: 0, // Lower initial velocity
+            vx: (Math.random() - 0.5) * 5, vy: 0, 
             angle: 0, angularVelocity: (Math.random() - 0.5) * 0.1, 
             isGrabbed: false, scale: type === 'KATANA' ? 2.5 : 2.0,
             color: type === 'KATANA' ? '#f43f5e' : (type === 'BOTTLE' ? '#3b82f6' : (type === 'BUCKET' ? '#eab308' : '#22c55e'))
         };
         mechaObjectsRef.current.push(obj);
+    },
+    update3DObject: (updated: ThreeDObject) => {
+        threeDObjectsRef.current = threeDObjectsRef.current.map(o => o.id === updated.id ? updated : o);
+    },
+    delete3DObject: (id: number) => {
+        threeDObjectsRef.current = threeDObjectsRef.current.filter(o => o.id !== id);
+        if (selected3DObjectIdRef.current === id) { selected3DObjectIdRef.current = null; if(onSelectionChange) onSelectionChange(null); }
+    },
+    duplicate3DObject: (obj: ThreeDObject) => {
+        const newObj = { ...obj, id: Date.now(), x: obj.x + 50, y: obj.y + 50 };
+        threeDObjectsRef.current.push(newObj);
     }
   }));
 
@@ -73,7 +101,7 @@ const GestureCanvas = forwardRef<GestureCanvasRef, GestureCanvasProps>(({ onStat
       const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.12/wasm");
       const handLandmarker = await HandLandmarker.createFromOptions(vision, {
         baseOptions: { modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`, delegate: "GPU" },
-        runningMode: "VIDEO", numHands: 1
+        runningMode: "VIDEO", numHands: 2
       });
       handLandmarkerRef.current = handLandmarker;
       startCamera();
@@ -91,31 +119,50 @@ const GestureCanvas = forwardRef<GestureCanvasRef, GestureCanvasProps>(({ onStat
     } catch (error) { 
         console.error(error);
         if (error instanceof DOMException && error.name === "NotAllowedError") {
-             // Permission denied explicitly
+             // Permission denied
         }
         onStateChange(GameState.ERROR); 
     }
   };
 
   const calculateFistStrength = (landmarks: any[]) => {
-      // 1. Calculate average distance from fingertips to wrist
       const wrist = landmarks[0];
       const tips = [landmarks[8], landmarks[12], landmarks[16], landmarks[20]]; 
       let totalDist = 0;
-      tips.forEach(t => {
-          totalDist += Math.hypot(t.x - wrist.x, t.y - wrist.y);
-      });
+      tips.forEach(t => { totalDist += Math.hypot(t.x - wrist.x, t.y - wrist.y); });
       const avgDist = totalDist / 4;
-
-      // 2. Map distance to strength (Linear Map)
-      // Tuned for better responsiveness
       const OPEN_THRESHOLD = 0.55;
       const CLOSED_THRESHOLD = 0.20;
-      
       let strength = (OPEN_THRESHOLD - avgDist) / (OPEN_THRESHOLD - CLOSED_THRESHOLD);
-      strength = Math.max(0, Math.min(1, strength)); 
+      return Math.max(0, Math.min(1, strength)); 
+  };
+
+  const project3D = (x: number, y: number, z: number, canvasW: number, canvasH: number) => {
+      const state = canvas3DStateRef.current;
+      // Simple perspective projection
+      // Translate to Camera
+      let px = x - state.camX;
+      let py = y - state.camY;
+      let pz = z - state.camZ;
+
+      // Rotate Yaw (Y)
+      let tempX = px * Math.cos(state.camRotY) - pz * Math.sin(state.camRotY);
+      let tempZ = px * Math.sin(state.camRotY) + pz * Math.cos(state.camRotY);
+      px = tempX; pz = tempZ;
+
+      // Rotate Pitch (X)
+      let tempY = py * Math.cos(state.camRotX) - pz * Math.sin(state.camRotX);
+      tempZ = py * Math.sin(state.camRotX) + pz * Math.cos(state.camRotX);
+      py = tempY; pz = tempZ;
+
+      const fov = 800 * state.zoom;
+      if (pz <= 0) return null; // Behind camera
       
-      return strength;
+      const screenX = (px * fov) / pz + canvasW / 2;
+      const screenY = (py * fov) / pz + canvasH / 2;
+      const scale = fov / pz;
+      
+      return { x: screenX, y: screenY, scale, zIndex: pz };
   };
 
   const predictWebcam = () => {
@@ -143,6 +190,7 @@ const GestureCanvas = forwardRef<GestureCanvasRef, GestureCanvasProps>(({ onStat
       missedFramesRef.current = 0;
       const landmarks = results.landmarks[0];
       rawLandmarksRef.current = landmarks;
+      secondHandLandmarksRef.current = results.landmarks.length > 1 ? results.landmarks[1] : null;
       
       const wrist = landmarks[0];
       const indexMCP = landmarks[5]; const pinkyMCP = landmarks[17]; const middleMCP = landmarks[9];
@@ -150,7 +198,6 @@ const GestureCanvas = forwardRef<GestureCanvasRef, GestureCanvasProps>(({ onStat
       
       const handScale = Math.max(Math.hypot(indexMCP.x - wrist.x, indexMCP.y - wrist.y), Math.hypot(pinkyMCP.x - wrist.x, pinkyMCP.y - wrist.y));
       
-      // Calculate Pitch & Roll
       const handVectorY = middleTip.y - wrist.y; 
       cursor.tilt = smoothScalar(cursor.tilt, handVectorY / handScale, 0.15);
       
@@ -158,7 +205,6 @@ const GestureCanvas = forwardRef<GestureCanvasRef, GestureCanvasProps>(({ onStat
       const dy = pinkyMCP.y - indexMCP.y;
       cursor.roll = Math.atan2(dy, dx);
 
-      // Safe Zone Mapping
       const knuckleMidX = (indexMCP.x + middleMCP.x + pinkyMCP.x) / 3;
       const knuckleMidY = (indexMCP.y + middleMCP.y + pinkyMCP.y) / 3;
       
@@ -206,46 +252,101 @@ const GestureCanvas = forwardRef<GestureCanvasRef, GestureCanvasProps>(({ onStat
           } else if (activityRef.current === 'ROBOT') {
               const handX = (1 - knuckleMidX) * canvas.width; 
               const handY = knuckleMidY * canvas.height;
-              
               mechaObjectsRef.current.forEach(obj => {
                   const d = Math.hypot(handX - obj.x, handY - obj.y);
-                  
-                  // Easier Grab: Threshold 0.4, Distance 160
                   if (cursor.fistStrength > 0.4 && d < 160 && !grabbedMechaIdRef.current) {
-                      grabbedMechaIdRef.current = obj.id;
-                      obj.isGrabbed = true;
+                      grabbedMechaIdRef.current = obj.id; obj.isGrabbed = true;
                   }
-                  
-                  // Release Throw
                   if (cursor.fistStrength < 0.35 && obj.id === grabbedMechaIdRef.current) {
                       obj.isGrabbed = false; grabbedMechaIdRef.current = null;
-                      // Clamp Throw Velocity to prevent "Orbit" launches
                       let vx = (cursor.x - prevCursorRef.current.x);
                       let vy = (cursor.y - prevCursorRef.current.y);
-                      
-                      const maxVel = 25; // Terminal throw speed
-                      vx = Math.max(-maxVel, Math.min(maxVel, vx));
-                      vy = Math.max(-maxVel, Math.min(maxVel, vy));
-
-                      obj.vx = vx; obj.vy = vy;
-                      obj.angularVelocity = (Math.random() - 0.5) * 0.3;
+                      const maxVel = 25; vx = Math.max(-maxVel, Math.min(maxVel, vx)); vy = Math.max(-maxVel, Math.min(maxVel, vy));
+                      obj.vx = vx; obj.vy = vy; obj.angularVelocity = (Math.random() - 0.5) * 0.3;
                   }
-
-                  // Hand Collision (Push)
                   if (!obj.isGrabbed && d < 80) {
-                      const angle = Math.atan2(obj.y - handY, obj.x - handX);
-                      const force = 3; // Reduced push force
-                      obj.vx += Math.cos(angle) * force;
-                      obj.vy += Math.sin(angle) * force;
+                      const angle = Math.atan2(obj.y - handY, obj.x - handX); const force = 3; 
+                      obj.vx += Math.cos(angle) * force; obj.vy += Math.sin(angle) * force;
                   }
-
                   if (obj.isGrabbed) {
-                      obj.x += (handX - obj.x) * 0.9; 
-                      obj.y += (handY - obj.y) * 0.9;
+                      obj.x += (handX - obj.x) * 0.9; obj.y += (handY - obj.y) * 0.9;
                       obj.angle = smoothScalar(obj.angle, cursor.roll + Math.PI/2, 0.2); 
                       obj.vx = 0; obj.vy = 0; obj.angularVelocity = 0;
                   }
               });
+          } else if (activityRef.current === 'STUDIO_3D') {
+              const now = performance.now();
+              // --- 3D INTERACTION ---
+              // 1. Two-Hand Zoom
+              if (secondHandLandmarksRef.current) {
+                  const l1 = rawLandmarksRef.current[9];
+                  const l2 = secondHandLandmarksRef.current[9];
+                  const handDist = Math.hypot(l1.x - l2.x, l1.y - l2.y);
+                  
+                  if (initialPinchDistRef.current === 0) {
+                      initialPinchDistRef.current = handDist;
+                      initialCamZoomRef.current = canvas3DStateRef.current.zoom;
+                  } else {
+                      const scale = handDist / initialPinchDistRef.current;
+                      canvas3DStateRef.current.zoom = Math.max(0.5, Math.min(3, initialCamZoomRef.current * scale));
+                  }
+              } else {
+                  initialPinchDistRef.current = 0;
+              }
+
+              // 2. Selection & Grab
+              if (cursor.pinching) {
+                  if (!pinchStartRef.current) pinchStartRef.current = { time: now, x: cursor.x, y: cursor.y };
+                  
+                  if (grabbed3DObjectIdRef.current) {
+                      // Move Object
+                      const obj = threeDObjectsRef.current.find(o => o.id === grabbed3DObjectIdRef.current);
+                      if (obj) {
+                          const deltaX = (cursor.x - prevCursorRef.current.x) * 1.5;
+                          const deltaY = (cursor.y - prevCursorRef.current.y) * 1.5;
+                          // Invert based on camera
+                          const rad = canvas3DStateRef.current.camRotY;
+                          obj.x += deltaX * Math.cos(rad) + deltaY * Math.sin(rad);
+                          obj.y -= deltaY; // Screen Y is World Y inv (simple)
+                          // Update ref array
+                          threeDObjectsRef.current = [...threeDObjectsRef.current];
+                      }
+                  } else if (!grabbed3DObjectIdRef.current) {
+                      // Check Hit
+                      let hitId: number | null = null;
+                      let minDist = 9999;
+                      threeDObjectsRef.current.forEach(obj => {
+                          const proj = project3D(obj.x, obj.y, obj.z, canvas.width, canvas.height);
+                          if (proj) {
+                              const dist = Math.hypot(cursor.x - proj.x, cursor.y - proj.y);
+                              const rad = 60 * proj.scale;
+                              if (dist < rad && dist < minDist) { minDist = dist; hitId = obj.id; }
+                          }
+                      });
+
+                      if (hitId) {
+                          grabbed3DObjectIdRef.current = hitId;
+                          // Check Long Hold for Selection
+                          if (now - pinchStartRef.current.time > 500) {
+                              if (Math.hypot(cursor.x - pinchStartRef.current.x, cursor.y - pinchStartRef.current.y) < 20) {
+                                  selected3DObjectIdRef.current = hitId;
+                                  if(onSelectionChange) onSelectionChange(hitId);
+                                  cursor.mode = 'LOCKED';
+                              }
+                          }
+                      } else {
+                          // Grab World (Camera)
+                          const deltaX = (cursor.x - prevCursorRef.current.x) * 2;
+                          const deltaY = (cursor.y - prevCursorRef.current.y) * 2;
+                          canvas3DStateRef.current.camRotY += deltaX * 0.005;
+                          canvas3DStateRef.current.camY += deltaY;
+                      }
+                  }
+              } else {
+                  pinchStartRef.current = null;
+                  grabbed3DObjectIdRef.current = null;
+                  cursor.mode = 'OPEN';
+              }
           }
       }
 
@@ -277,88 +378,92 @@ const GestureCanvas = forwardRef<GestureCanvasRef, GestureCanvasProps>(({ onStat
         } else if (activityRef.current === 'ROBOT') {
             if (rawLandmarksRef.current) drawRoboticHand(ctx, rawLandmarksRef.current, canvas.width, canvas.height, cursor.fistStrength);
             drawMechaEnvironment(ctx, mechaObjectsRef.current, canvas.width, canvas.height);
+        } else if (activityRef.current === 'STUDIO_3D') {
+            draw3DStudio(ctx, canvas.width, canvas.height);
         }
       }
       
-      if (cursor.visible && (modeRef.current === 'BROWSE' || activityRef.current === 'SHAPES')) {
+      if (cursor.visible && (modeRef.current === 'BROWSE' || activityRef.current !== 'ROBOT')) {
         drawHudCursor(ctx, cursor.x, cursor.y, cursor.pinching, cursor.mode, cursor.pinchVal, cursor.releaseProgress, modeRef.current, cursor.tilt);
       }
     }
     requestRef.current = requestAnimationFrame(predictWebcam);
   };
 
+  const draw3DStudio = (ctx: CanvasRenderingContext2D, width: number, height: number) => {
+      // 1. Draw 3D Grid
+      const gridSize = 500;
+      const step = 50;
+      ctx.strokeStyle = 'rgba(6, 182, 212, 0.2)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for(let x = -gridSize; x <= gridSize; x+=step) {
+          const p1 = project3D(x, 200, -gridSize, width, height);
+          const p2 = project3D(x, 200, gridSize, width, height);
+          if (p1 && p2) { ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); }
+      }
+      for(let z = -gridSize; z <= gridSize; z+=step) {
+          const p1 = project3D(-gridSize, 200, z, width, height);
+          const p2 = project3D(gridSize, 200, z, width, height);
+          if (p1 && p2) { ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); }
+      }
+      ctx.stroke();
+
+      // 2. Draw Objects (Sort by Z)
+      const renderList = threeDObjectsRef.current.map(obj => ({
+          obj,
+          proj: project3D(obj.x, obj.y, obj.z, width, height)
+      })).filter(item => item.proj !== null)
+      .sort((a, b) => b.proj!.zIndex - a.proj!.zIndex);
+
+      renderList.forEach(({ obj, proj }) => {
+          if (!proj) return;
+          const isSelected = selected3DObjectIdRef.current === obj.id;
+          ctx.save();
+          ctx.translate(proj.x, proj.y);
+          const s = 40 * proj.scale;
+          
+          ctx.fillStyle = isSelected ? '#fff' : obj.color;
+          ctx.strokeStyle = isSelected ? '#F43F5E' : '#fff';
+          ctx.shadowBlur = isSelected ? 20 : 0;
+          ctx.shadowColor = '#F43F5E';
+          
+          // Simple Cube representation for now
+          ctx.fillRect(-s, -s, s*2, s*2);
+          ctx.strokeRect(-s, -s, s*2, s*2);
+          
+          if (isSelected) {
+              ctx.beginPath(); ctx.arc(0,0, s*1.5, 0, Math.PI*2); ctx.strokeStyle = '#F43F5E'; ctx.lineWidth = 2; ctx.stroke();
+          }
+          ctx.restore();
+      });
+  };
+
   const updateMechaPhysics = (obj: MechaObject, width: number, height: number) => {
       if (obj.isGrabbed) return;
-      
-      const gravity = 0.55; 
-      const airResistance = 0.99; // Prevents "flying forever"
-      const floorY = height - 50;
-      const restitution = 0.45; // Less bouncy
-      const floorFriction = 0.92; // Slides to a stop
-
-      obj.vy += gravity;
-      obj.vx *= airResistance;
-      obj.vy *= airResistance;
-      
-      obj.x += obj.vx;
-      obj.y += obj.vy;
-      obj.angle += obj.angularVelocity;
-      obj.angularVelocity *= 0.98; // Rotational drag
-
-      // Floor Collision
-      const objectBottom = obj.y + (30 * obj.scale * 0.5); // Approx collision radius
-      
+      const gravity = 0.55; const airResistance = 0.99; const floorY = height - 50;
+      obj.vy += gravity; obj.vx *= airResistance; obj.vy *= airResistance;
+      obj.x += obj.vx; obj.y += obj.vy; obj.angle += obj.angularVelocity; obj.angularVelocity *= 0.98;
+      const objectBottom = obj.y + (30 * obj.scale * 0.5);
       if (objectBottom > floorY) {
-          obj.y = floorY - (30 * obj.scale * 0.5); // Correct pos
-          
-          if (Math.abs(obj.vy) > 3) {
-              obj.vy *= -restitution;
-          } else {
-              obj.vy = 0; // Settle
-          }
-          
-          obj.vx *= floorFriction;
-          obj.angularVelocity *= 0.8;
+          obj.y = floorY - (30 * obj.scale * 0.5); 
+          if (Math.abs(obj.vy) > 3) obj.vy *= -0.45; else obj.vy = 0;
+          obj.vx *= 0.92; obj.angularVelocity *= 0.8;
       }
-      
-      // Walls
       if (obj.x < 0) { obj.x = 0; obj.vx *= -0.6; }
       if (obj.x > width) { obj.x = width; obj.vx *= -0.6; }
   };
 
   const drawMechaEnvironment = (ctx: CanvasRenderingContext2D, objects: MechaObject[], width: number, height: number) => {
-      // Floor
       const floorY = height - 50;
-      ctx.save();
-      ctx.strokeStyle = '#22d3ee';
-      ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.moveTo(0, floorY); ctx.lineTo(width, floorY); ctx.stroke();
-      
-      // Objects
+      ctx.save(); ctx.strokeStyle = '#22d3ee'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(0, floorY); ctx.lineTo(width, floorY); ctx.stroke();
       objects.forEach(obj => {
-          ctx.save();
-          ctx.translate(obj.x, obj.y);
-          ctx.rotate(obj.angle);
-          ctx.scale(obj.scale, obj.scale); 
-          ctx.strokeStyle = obj.color;
-          ctx.lineWidth = 3;
-          ctx.shadowColor = obj.color;
-          ctx.shadowBlur = 10;
-          
-          if (obj.type === 'KATANA') {
-              ctx.beginPath();
-              ctx.moveTo(-40, 0); ctx.lineTo(40, 0); // Blade
-              ctx.moveTo(-40, 0); ctx.lineTo(-50, 5); ctx.lineTo(-50, -5); ctx.closePath(); // Handle
-              ctx.stroke();
-          } else if (obj.type === 'BOTTLE') {
-              ctx.strokeRect(-15, -30, 30, 60);
-              ctx.strokeRect(-10, -45, 20, 15);
-          } else if (obj.type === 'BUCKET') {
-              ctx.beginPath(); ctx.moveTo(-20, -20); ctx.lineTo(20, -20); ctx.lineTo(15, 20); ctx.lineTo(-15, 20); ctx.closePath(); ctx.stroke();
-              ctx.beginPath(); ctx.arc(0, -20, 20, Math.PI, 0); ctx.stroke();
-          } else if (obj.type === 'BALL') {
-              ctx.beginPath(); ctx.arc(0, 0, 20, 0, Math.PI*2); ctx.stroke();
-          }
+          ctx.save(); ctx.translate(obj.x, obj.y); ctx.rotate(obj.angle); ctx.scale(obj.scale, obj.scale); 
+          ctx.strokeStyle = obj.color; ctx.lineWidth = 3; ctx.shadowColor = obj.color; ctx.shadowBlur = 10;
+          if (obj.type === 'KATANA') { ctx.beginPath(); ctx.moveTo(-40, 0); ctx.lineTo(40, 0); ctx.moveTo(-40, 0); ctx.lineTo(-50, 5); ctx.lineTo(-50, -5); ctx.closePath(); ctx.stroke(); } 
+          else if (obj.type === 'BOTTLE') { ctx.strokeRect(-15, -30, 30, 60); ctx.strokeRect(-10, -45, 20, 15); } 
+          else if (obj.type === 'BUCKET') { ctx.beginPath(); ctx.moveTo(-20, -20); ctx.lineTo(20, -20); ctx.lineTo(15, 20); ctx.lineTo(-15, 20); ctx.closePath(); ctx.stroke(); ctx.beginPath(); ctx.arc(0, -20, 20, Math.PI, 0); ctx.stroke(); } 
+          else if (obj.type === 'BALL') { ctx.beginPath(); ctx.arc(0, 0, 20, 0, Math.PI*2); ctx.stroke(); }
           ctx.restore();
       });
       ctx.restore();
@@ -367,90 +472,33 @@ const GestureCanvas = forwardRef<GestureCanvasRef, GestureCanvasProps>(({ onStat
   const drawSciFiObject = (ctx: CanvasRenderingContext2D, obj: PhysicsObject) => {
     ctx.save();
     const isActive = obj.isGrabbed || obj.isHovered;
-    const pulse = isActive ? Math.sin(performance.now() / 100) * 5 : 0;
-    
-    ctx.shadowBlur = isActive ? 30 + pulse : 15;
-    ctx.shadowColor = obj.glowColor;
-    ctx.fillStyle = isActive ? '#ffffff' : obj.color;
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 2;
-
-    if (obj.shape === 'ORB') {
-      ctx.beginPath(); ctx.arc(obj.x, obj.y, obj.radius, 0, Math.PI * 2); ctx.fillStyle = obj.color; ctx.fill(); ctx.stroke();
-    } else if (obj.shape === 'CUBE') {
-      const s = obj.radius * 1.6; ctx.translate(obj.x, obj.y); ctx.rotate((obj.vx + obj.vy) * 0.05); ctx.fillRect(-s/2, -s/2, s, s); ctx.strokeRect(-s/2, -s/2, s, s);
-    } else if (obj.shape === 'PYRAMID') {
-      const s = obj.radius * 1.8; ctx.translate(obj.x, obj.y); ctx.rotate(performance.now() / 1000); 
-      ctx.beginPath(); ctx.moveTo(0, -s/1.5); ctx.lineTo(s/1.5, s/2); ctx.lineTo(-s/1.5, s/2); ctx.closePath(); ctx.fill(); ctx.stroke();
-    }
+    ctx.shadowBlur = isActive ? 30 : 15; ctx.shadowColor = obj.glowColor; ctx.fillStyle = isActive ? '#ffffff' : obj.color; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2;
+    if (obj.shape === 'ORB') { ctx.beginPath(); ctx.arc(obj.x, obj.y, obj.radius, 0, Math.PI * 2); ctx.fill(); ctx.stroke(); } 
+    else if (obj.shape === 'CUBE') { const s = obj.radius * 1.6; ctx.translate(obj.x, obj.y); ctx.rotate((obj.vx + obj.vy) * 0.05); ctx.fillRect(-s/2, -s/2, s, s); ctx.strokeRect(-s/2, -s/2, s, s); } 
+    else if (obj.shape === 'PYRAMID') { const s = obj.radius * 1.8; ctx.translate(obj.x, obj.y); ctx.rotate(performance.now() / 1000); ctx.beginPath(); ctx.moveTo(0, -s/1.5); ctx.lineTo(s/1.5, s/2); ctx.lineTo(-s/1.5, s/2); ctx.closePath(); ctx.fill(); ctx.stroke(); }
     ctx.restore();
   };
 
   const drawHudCursor = (ctx: CanvasRenderingContext2D, x: number, y: number, pinching: boolean, mode: string, pinchVal: number, releaseProgress: number, screenMode: ScreenMode, tilt: number) => {
-    ctx.save();
-    ctx.translate(x, y);
-    
+    ctx.save(); ctx.translate(x, y);
     let color;
+    if (screenMode === 'BROWSE') { if (mode === 'PINCH') color = '#FACC15'; else color = '#38BDF8'; } 
+    else { if (mode === 'LOCKED') color = '#F43F5E'; else if (mode === 'PINCH') color = '#E879F9'; else if (mode === 'OPEN') color = '#34D399'; else color = '#22D3EE'; }
+    ctx.strokeStyle = color; ctx.shadowBlur = 10; ctx.shadowColor = color; ctx.lineWidth = 2;
+    const time = performance.now(); ctx.save(); ctx.rotate(time / 500); const r = 25; ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 0.3); ctx.stroke(); ctx.beginPath(); ctx.arc(0, 0, r, Math.PI, Math.PI * 1.3); ctx.stroke(); ctx.restore();
     if (screenMode === 'BROWSE') {
-         if (mode === 'PINCH') color = '#FACC15'; 
-         else color = '#38BDF8'; 
-    } else {
-         if (mode === 'LOCKED') color = '#F43F5E';
-         else if (mode === 'PINCH') color = '#E879F9';
-         else if (mode === 'OPEN') color = '#34D399';
-         else color = '#22D3EE';
+        const gaugeH = 40; const xOff = 35; ctx.fillStyle = 'rgba(255,255,255,0.2)'; ctx.fillRect(xOff, -gaugeH/2, 4, gaugeH);
+        const tiltVal = Math.min(1, Math.max(-1, tilt)); const isScrolling = Math.abs(tiltVal) > 0.6;
+        ctx.fillStyle = isScrolling ? (tiltVal > 0 ? '#FACC15' : '#34D399') : '#fff'; ctx.fillRect(xOff - 2, tiltVal * (gaugeH/2) - 2, 8, 4);
     }
-
-    ctx.strokeStyle = color;
-    ctx.shadowBlur = 10;
-    ctx.shadowColor = color;
-    ctx.lineWidth = 2;
-
-    const time = performance.now();
-    ctx.save();
-    ctx.rotate(time / 500);
-    const r = 25;
-    ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 0.3); ctx.stroke();
-    ctx.beginPath(); ctx.arc(0, 0, r, Math.PI, Math.PI * 1.3); ctx.stroke();
-    ctx.restore();
-    
-    if (screenMode === 'BROWSE') {
-        const gaugeH = 40; const xOff = 35;
-        ctx.fillStyle = 'rgba(255,255,255,0.2)'; ctx.fillRect(xOff, -gaugeH/2, 4, gaugeH);
-        const tiltVal = Math.min(1, Math.max(-1, tilt)); 
-        const isScrolling = Math.abs(tiltVal) > 0.6;
-        ctx.fillStyle = isScrolling ? (tiltVal > 0 ? '#FACC15' : '#34D399') : '#fff';
-        const indicatorY = tiltVal * (gaugeH/2);
-        ctx.fillRect(xOff - 2, indicatorY - 2, 8, 4);
-    }
-
-    if (mode === 'LOCKED' && releaseProgress > 0) {
-        ctx.beginPath(); ctx.arc(0, 0, 30 + releaseProgress * 20, 0, Math.PI * 2);
-        ctx.strokeStyle = `rgba(244, 63, 94, ${1 - releaseProgress})`;
-        ctx.stroke();
-    }
-
-    if (mode !== 'LOCKED') {
-        const visualPinch = Math.min(1, Math.max(0, pinchVal));
-        if (visualPinch < 0.6) { 
-            ctx.beginPath(); ctx.arc(0, 0, Math.max(8, visualPinch * 60), 0, Math.PI * 2);
-            ctx.fillStyle = `rgba(232, 121, 249, ${0.8 - visualPinch})`; 
-            ctx.fill(); ctx.stroke();
-        }
-    }
-
-    ctx.fillStyle = color;
-    ctx.beginPath(); ctx.arc(0, 0, 4, 0, Math.PI * 2); ctx.fill();
-    ctx.restore();
+    if (mode === 'LOCKED' && releaseProgress > 0) { ctx.beginPath(); ctx.arc(0, 0, 30 + releaseProgress * 20, 0, Math.PI * 2); ctx.strokeStyle = `rgba(244, 63, 94, ${1 - releaseProgress})`; ctx.stroke(); }
+    if (mode !== 'LOCKED') { const visualPinch = Math.min(1, Math.max(0, pinchVal)); if (visualPinch < 0.6) { ctx.beginPath(); ctx.arc(0, 0, Math.max(8, visualPinch * 60), 0, Math.PI * 2); ctx.fillStyle = `rgba(232, 121, 249, ${0.8 - visualPinch})`; ctx.fill(); ctx.stroke(); } }
+    ctx.fillStyle = color; ctx.beginPath(); ctx.arc(0, 0, 4, 0, Math.PI * 2); ctx.fill(); ctx.restore();
   };
 
   const drawGrid = (ctx: CanvasRenderingContext2D, width: number, height: number, mode: ScreenMode) => {
-    ctx.save();
-    const opacity = mode === 'BROWSE' ? 0.05 : 0.15;
-    ctx.strokeStyle = `rgba(6, 182, 212, ${opacity})`; 
-    ctx.lineWidth = 1;
-    const gridSize = 60;
-    gridOffsetRef.current = (gridOffsetRef.current + 0.5) % gridSize;
+    ctx.save(); const opacity = mode === 'BROWSE' ? 0.05 : 0.15; ctx.strokeStyle = `rgba(6, 182, 212, ${opacity})`; ctx.lineWidth = 1;
+    const gridSize = 60; gridOffsetRef.current = (gridOffsetRef.current + 0.5) % gridSize;
     for (let x = 0; x <= width; x += gridSize) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke(); }
     for (let y = gridOffsetRef.current; y <= height; y += gridSize) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke(); }
     ctx.restore();
@@ -458,62 +506,22 @@ const GestureCanvas = forwardRef<GestureCanvasRef, GestureCanvasProps>(({ onStat
 
   const drawRoboticHand = (ctx: CanvasRenderingContext2D, landmarks: any[], width: number, height: number, fistStrength: number) => {
     ctx.save(); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-    const map = (lm: any) => {
-        const zScale = 1 + (Math.abs(lm.z) * 4); 
-        const x = (1 - lm.x) * width; const y = lm.y * height;
-        return { x, y, scale: zScale, z: lm.z };
-    };
+    const map = (lm: any) => { const zScale = 1 + (Math.abs(lm.z) * 4); const x = (1 - lm.x) * width; const y = lm.y * height; return { x, y, scale: zScale, z: lm.z }; };
     const points = landmarks.map(map);
     const fingers = [[0, 1, 2, 3, 4], [0, 5, 6, 7, 8], [0, 9, 10, 11, 12], [0, 13, 14, 15, 16], [0, 17, 18, 19, 20]];
-
     const center = points[9]; 
-    const ringRadius = 80;
-    ctx.beginPath();
-    ctx.arc(center.x, center.y, ringRadius, 0, Math.PI * 2);
-    if (fistStrength > 0.4) {
-        ctx.strokeStyle = '#F43F5E'; ctx.lineWidth = 4; // Locked
-        ctx.shadowColor = '#F43F5E';
-    } else if (fistStrength > 0.2) {
-        ctx.strokeStyle = '#FACC15'; ctx.lineWidth = 2; // Forming
-        ctx.shadowColor = '#FACC15';
-    } else {
-        ctx.strokeStyle = 'rgba(34, 211, 238, 0.3)'; ctx.lineWidth = 1; // Idle
-        ctx.shadowColor = '#22D3EE';
-    }
-    ctx.shadowBlur = 15;
-    ctx.stroke();
-
-    ctx.strokeStyle = 'rgba(6, 182, 212, 0.3)'; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(points[0].x, points[0].y); ctx.lineTo(points[5].x, points[5].y); ctx.lineTo(points[17].x, points[17].y); ctx.closePath(); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(points[5].x, points[5].y); ctx.lineTo(points[17].x, points[17].y); ctx.stroke();
-
+    ctx.beginPath(); ctx.arc(center.x, center.y, 80, 0, Math.PI * 2);
+    if (fistStrength > 0.4) { ctx.strokeStyle = '#F43F5E'; ctx.lineWidth = 4; ctx.shadowColor = '#F43F5E'; } else if (fistStrength > 0.2) { ctx.strokeStyle = '#FACC15'; ctx.lineWidth = 2; ctx.shadowColor = '#FACC15'; } else { ctx.strokeStyle = 'rgba(34, 211, 238, 0.3)'; ctx.lineWidth = 1; ctx.shadowColor = '#22D3EE'; }
+    ctx.shadowBlur = 15; ctx.stroke();
+    ctx.strokeStyle = 'rgba(6, 182, 212, 0.3)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(points[0].x, points[0].y); ctx.lineTo(points[5].x, points[5].y); ctx.lineTo(points[17].x, points[17].y); ctx.closePath(); ctx.stroke(); ctx.beginPath(); ctx.moveTo(points[5].x, points[5].y); ctx.lineTo(points[17].x, points[17].y); ctx.stroke();
     fingers.forEach(indices => {
-        ctx.beginPath();
-        for (let i = 0; i < indices.length - 1; i++) {
-            const curr = points[indices[i]]; const next = points[indices[i+1]];
-            ctx.moveTo(curr.x, curr.y); ctx.lineTo(next.x, next.y);
-        }
-        ctx.lineWidth = 6; ctx.strokeStyle = 'rgba(6, 182, 212, 0.2)'; ctx.stroke();
-        ctx.lineWidth = 2; ctx.strokeStyle = '#22D3EE'; ctx.stroke();
-        
+        ctx.beginPath(); for (let i = 0; i < indices.length - 1; i++) { const curr = points[indices[i]]; const next = points[indices[i+1]]; ctx.moveTo(curr.x, curr.y); ctx.lineTo(next.x, next.y); }
+        ctx.lineWidth = 6; ctx.strokeStyle = 'rgba(6, 182, 212, 0.2)'; ctx.stroke(); ctx.lineWidth = 2; ctx.strokeStyle = '#22D3EE'; ctx.stroke();
         indices.forEach((idx, pos) => {
             const p = points[idx]; const size = (pos === 0 ? 10 : 6) * p.scale; 
             ctx.beginPath(); ctx.fillStyle = '#0f172a'; ctx.arc(p.x, p.y, size, 0, Math.PI * 2); ctx.fill();
-            ctx.beginPath();
-            if (pos === 4) { ctx.strokeStyle = '#F472B6'; ctx.arc(p.x, p.y, size * 0.8, 0, Math.PI * 2); } 
-            else {
-                 ctx.strokeStyle = '#22D3EE'; 
-                 const sides = 6;
-                 for (let k = 0; k < sides; k++) {
-                     const angle = (k * 2 * Math.PI) / sides;
-                     const hx = p.x + size * 0.8 * Math.cos(angle);
-                     const hy = p.y + size * 0.8 * Math.sin(angle);
-                     if (k===0) ctx.moveTo(hx, hy); else ctx.lineTo(hx, hy);
-                 }
-                 ctx.closePath();
-            }
-            ctx.lineWidth = 2; ctx.stroke();
-            ctx.beginPath(); ctx.fillStyle = '#fff'; ctx.arc(p.x, p.y, size * 0.2, 0, Math.PI * 2); ctx.fill();
+            ctx.beginPath(); if (pos === 4) { ctx.strokeStyle = '#F472B6'; ctx.arc(p.x, p.y, size * 0.8, 0, Math.PI * 2); } else { ctx.strokeStyle = '#22D3EE'; const sides = 6; for (let k = 0; k < sides; k++) { const angle = (k * 2 * Math.PI) / sides; const hx = p.x + size * 0.8 * Math.cos(angle); const hy = p.y + size * 0.8 * Math.sin(angle); if (k===0) ctx.moveTo(hx, hy); else ctx.lineTo(hx, hy); } ctx.closePath(); }
+            ctx.lineWidth = 2; ctx.stroke(); ctx.beginPath(); ctx.fillStyle = '#fff'; ctx.arc(p.x, p.y, size * 0.2, 0, Math.PI * 2); ctx.fill();
         });
     });
     ctx.restore();

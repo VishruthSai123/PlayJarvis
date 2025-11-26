@@ -3,8 +3,9 @@ import React, { useState, useRef } from 'react';
 import GestureCanvas, { GestureCanvasRef } from './components/GestureCanvas';
 import Instructions from './components/Instructions';
 import BrowseScreen from './components/BrowseScreen';
-import { GameState, ScreenMode, CursorData, PlaygroundActivity, MechaObjectType } from './types';
-import { LayoutGrid, Globe, Power, Loader2, Camera, AlertTriangle, ChevronDown, Bot, Shapes, Plus, Box, Sword, GlassWater, Circle } from 'lucide-react';
+import ObjectParamsPanel from './components/ObjectParamsPanel';
+import { GameState, ScreenMode, CursorData, PlaygroundActivity, MechaObjectType, ThreeDObject } from './types';
+import { LayoutGrid, Globe, Power, Loader2, Camera, AlertTriangle, ChevronDown, Bot, Shapes, Plus, Box, Sword, GlassWater, Circle, Cuboid } from 'lucide-react';
 
 function App() {
   const [gameState, setGameState] = useState<GameState>(GameState.LOADING_MODEL);
@@ -12,6 +13,7 @@ function App() {
   const [playgroundActivity, setPlaygroundActivity] = useState<PlaygroundActivity>('SHAPES');
   const [isActivityMenuOpen, setIsActivityMenuOpen] = useState(false);
   const [isSpawnerOpen, setIsSpawnerOpen] = useState(false);
+  const [selected3DObject, setSelected3DObject] = useState<ThreeDObject | null>(null);
   
   const [cursorData, setCursorData] = useState<CursorData | null>(null);
   const [hasStarted, setHasStarted] = useState(false);
@@ -21,6 +23,28 @@ function App() {
   const spawn = (type: MechaObjectType) => {
       if (canvasRef.current) canvasRef.current.spawnMechaObject(type);
       setIsSpawnerOpen(false);
+  };
+
+  const handle3DUpdate = (obj: ThreeDObject) => {
+      setSelected3DObject(obj);
+      if (canvasRef.current) canvasRef.current.update3DObject(obj);
+  };
+
+  const handle3DDelete = (id: number) => {
+      setSelected3DObject(null);
+      if (canvasRef.current) canvasRef.current.delete3DObject(id);
+  };
+
+  const handle3DDuplicate = (obj: ThreeDObject) => {
+      if (canvasRef.current) canvasRef.current.duplicate3DObject(obj);
+  };
+
+  const onSelectionChange = (id: number | null) => {
+      if (id === null) setSelected3DObject(null);
+      else {
+          if (id) setSelected3DObject({ id, type: 'CUBE', x: 0, y: 0, z: 0, rotX: 0, rotY: 0, rotZ: 0, scaleX: 1, scaleY: 1, scaleZ: 1, color: '#F43F5E' });
+          else setSelected3DObject(null);
+      }
   };
 
   if (!hasStarted) {
@@ -78,8 +102,10 @@ function App() {
           {screenMode === 'PLAYGROUND' && (
               <div className="absolute top-4 right-20 z-40">
                   <button onClick={() => setIsActivityMenuOpen(!isActivityMenuOpen)} className="flex items-center gap-2 bg-cyan-950/50 backdrop-blur p-2 border border-cyan-500/50 text-cyan-300 hover:text-cyan-100 hover:bg-cyan-900/80 transition-all pointer-events-auto">
-                     {playgroundActivity === 'SHAPES' ? <Shapes size={18}/> : <Bot size={18}/>}
-                     <span className="text-xs font-bold font-mono">{playgroundActivity === 'SHAPES' ? 'GRAVITY' : 'MECHA'}</span>
+                     {playgroundActivity === 'SHAPES' ? <Shapes size={18}/> : (playgroundActivity === 'ROBOT' ? <Bot size={18}/> : <Cuboid size={18}/>)}
+                     <span className="text-xs font-bold font-mono">
+                         {playgroundActivity === 'SHAPES' ? 'GRAVITY' : (playgroundActivity === 'ROBOT' ? 'MECHA' : '3D STUDIO')}
+                     </span>
                      <ChevronDown size={14} className={`transition-transform ${isActivityMenuOpen ? 'rotate-180' : ''}`}/>
                   </button>
 
@@ -87,9 +113,21 @@ function App() {
                       <div className="absolute top-full right-0 mt-2 w-40 bg-slate-950/90 border border-cyan-500/30 shadow-xl backdrop-blur-md flex flex-col p-1 gap-1 pointer-events-auto">
                           <button onClick={() => { setPlaygroundActivity('SHAPES'); setIsActivityMenuOpen(false); }} className={`flex items-center gap-2 p-2 text-xs font-mono font-bold hover:bg-cyan-900/50 text-left transition-colors ${playgroundActivity === 'SHAPES' ? 'text-cyan-300 bg-cyan-950' : 'text-slate-400'}`}><Shapes size={14} /> GRAVITY SHAPES</button>
                           <button onClick={() => { setPlaygroundActivity('ROBOT'); setIsActivityMenuOpen(false); }} className={`flex items-center gap-2 p-2 text-xs font-mono font-bold hover:bg-cyan-900/50 text-left transition-colors ${playgroundActivity === 'ROBOT' ? 'text-cyan-300 bg-cyan-950' : 'text-slate-400'}`}><Bot size={14} /> MECHA HAND</button>
+                          <button onClick={() => { setPlaygroundActivity('STUDIO_3D'); setIsActivityMenuOpen(false); }} className={`flex items-center gap-2 p-2 text-xs font-mono font-bold hover:bg-cyan-900/50 text-left transition-colors ${playgroundActivity === 'STUDIO_3D' ? 'text-cyan-300 bg-cyan-950' : 'text-slate-400'}`}><Cuboid size={14} /> 3D STUDIO</button>
                       </div>
                   )}
               </div>
+          )}
+
+          {/* OBJECT PARAMS PANEL */}
+          {screenMode === 'PLAYGROUND' && playgroundActivity === 'STUDIO_3D' && selected3DObject && (
+              <ObjectParamsPanel 
+                  object={selected3DObject} 
+                  onUpdate={handle3DUpdate} 
+                  onDelete={handle3DDelete} 
+                  onDuplicate={handle3DDuplicate}
+                  onClose={() => setSelected3DObject(null)}
+              />
           )}
           
           {screenMode === 'PLAYGROUND' && playgroundActivity === 'ROBOT' && (
@@ -121,7 +159,8 @@ function App() {
           onStateChange={setGameState} 
           mode={screenMode}
           playgroundActivity={playgroundActivity}
-          onCursorUpdate={setCursorData} 
+          onCursorUpdate={setCursorData}
+          onSelectionChange={onSelectionChange}
         />
       </div>
     </div>

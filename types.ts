@@ -8,7 +8,7 @@ export type ShapeType = 'ORB' | 'CUBE' | 'PYRAMID';
 
 export type ScreenMode = 'PLAYGROUND' | 'BROWSE';
 
-export type PlaygroundActivity = 'SHAPES' | 'ROBOT';
+export type PlaygroundActivity = 'SHAPES' | 'ROBOT' | 'STUDIO_3D';
 
 export type MechaObjectType = 'KATANA' | 'BOTTLE' | 'BUCKET' | 'BALL';
 
@@ -51,6 +51,31 @@ export interface MechaObject {
   isGrabbed: boolean;
   scale: number;
   color: string;
+}
+
+// --- 3D STUDIO TYPES ---
+export interface ThreeDObject {
+  id: number;
+  type: 'CUBE' | 'SPHERE' | 'PYRAMID' | 'CYLINDER';
+  x: number;
+  y: number;
+  z: number;
+  rotX: number;
+  rotY: number;
+  rotZ: number;
+  scaleX: number;
+  scaleY: number;
+  scaleZ: number;
+  color: string;
+}
+
+export interface Canvas3DState {
+  camX: number;
+  camY: number;
+  camZ: number;
+  camRotX: number; // Pitch
+  camRotY: number; // Yaw
+  zoom: number;
 }
 
 export interface HandState {
